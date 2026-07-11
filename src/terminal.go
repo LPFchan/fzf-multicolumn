@@ -3825,6 +3825,68 @@ func (t *Terminal) gridRows() int {
 	return (t.merger.Length() + t.grid - 1) / t.grid
 }
 
+// Per-cell decoration width (pointer + marker) plus the gap to the next cell
+const gridCellGap = 2
+
+func (t *Terminal) gridCellOverhead() int {
+	return t.pointerLen + t.markerLen + gridCellGap
+}
+
+// firstLineRunes returns the first line of an item, which is all a grid cell
+// can display.
+func gridCellRunes(item *Item) []rune {
+	text := item.text.ToRunes()
+	for idx, r := range text {
+		if r == '\n' {
+			return text[:idx]
+		}
+	}
+	return text
+}
+
+// gridColumnWidths sizes each column to its widest matched item (dynamic
+// spacing) instead of an even 1/N split. When the columns don't fit, the
+// widest column is shrunk first so narrow columns keep their alignment.
+// Measuring is capped; oversized lists fall back to the even split.
+func (t *Terminal) gridColumnWidths(count int) []int {
+	avail := t.window.Width() - t.barCol()
+	widths := make([]int, t.grid)
+	overhead := t.gridCellOverhead()
+	const measureLimit = 4096
+	if count > measureLimit {
+		for col := range widths {
+			widths[col] = avail / t.grid
+		}
+		return widths
+	}
+	for index := 0; index < count; index++ {
+		col := index % t.grid
+		text := gridCellRunes(t.merger.Get(index).item)
+		width := t.displayWidthWithLimit(text, 0, avail) + overhead
+		if width > widths[col] {
+			widths[col] = width
+		}
+	}
+	total := 0
+	for _, width := range widths {
+		total += width
+	}
+	for total > avail {
+		widest := 0
+		for col := 1; col < t.grid; col++ {
+			if widths[col] > widths[widest] {
+				widest = col
+			}
+		}
+		if widths[widest] <= overhead+1 {
+			break
+		}
+		widths[widest]--
+		total--
+	}
+	return widths
+}
+
 // printGridList renders the list window as a row-major grid of t.grid columns.
 // Grid cells cannot span multiple lines, so wrap/gap/multi-line features do
 // not apply here. Lines are fully redrawn on every pass and marked "other" so
@@ -3835,26 +3897,29 @@ func (t *Terminal) printGridList() {
 	startLine := t.promptLines() + t.visibleHeaderLinesInList()
 	count := t.merger.Length()
 	barRange := [2]int{startLine + barStart, startLine + barStart + barLength}
-	cellWidth := (t.window.Width() - t.barCol()) / t.grid
+	widths := t.gridColumnWidths(count)
+	overhead := t.gridCellOverhead()
 	for row := 0; row < numRows; row++ {
 		line := startLine + row
 		t.move(line, 0, true)
 		t.markOtherLine(line)
-		if cellWidth > t.pointerLen+t.markerLen {
-			for col := 0; col < t.grid; col++ {
-				index := t.offset + row*t.grid + col
-				if index >= count {
-					break
-				}
-				t.move(line, col*cellWidth, false)
-				t.printGridCell(t.merger.Get(index), index, cellWidth)
+		x := 0
+		for col := 0; col < t.grid; col++ {
+			index := t.offset + row*t.grid + col
+			if index >= count {
+				break
 			}
+			if widths[col] > overhead {
+				t.move(line, x, false)
+				t.printGridCell(t.merger.Get(index), index, widths[col]-overhead)
+			}
+			x += widths[col]
 		}
 		t.printBar(line, true, barRange)
 	}
 }
 
-func (t *Terminal) printGridCell(result Result, index int, cellWidth int) {
+func (t *Terminal) printGridCell(result Result, index int, maxTextWidth int) {
 	item := result.item
 	current := index == t.cy
 	_, selected := t.selected[item.Index()]
@@ -3912,15 +3977,8 @@ func (t *Terminal) printGridCell(result Result, index int, cellWidth int) {
 	}
 	allOffsets := result.colorOffsets(charOffsets, nil, t.theme, colBase, colMatch, t.nthAttr, 0, false)
 
-	// One-space gap between cells; only the first line of a multi-line item is shown
-	maxTextWidth := cellWidth - t.pointerLen - t.markerLen - 1
-	text := item.text.ToRunes()
-	for idx, r := range text {
-		if r == '\n' {
-			text = text[:idx]
-			break
-		}
-	}
+	// Only the first line of a multi-line item is shown
+	text := gridCellRunes(item)
 	if t.displayWidthWithLimit(text, 0, maxTextWidth) > maxTextWidth {
 		ellipsis, ellipsisWidth := util.Truncate(t.ellipsis, maxTextWidth)
 		trimmed, _ := t.trimRight(text, maxTextWidth-ellipsisWidth)
