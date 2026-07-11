@@ -67,7 +67,14 @@ Grid cells are single-line: only the first line of a multi-line item is shown, a
 
 ## Installation
 
-Build from source (Go 1.20+):
+Prebuilt static binaries for macOS (arm64/amd64) and Linux (amd64/arm64) are on the [releases page](https://github.com/LPFchan/fzf-multicolumn/releases), with a SHA-256 checksums file per release:
+
+```sh
+curl -fsSLO https://github.com/LPFchan/fzf-multicolumn/releases/latest/download/fzf-multicolumn-0.74.0-multicolumn.1-darwin_arm64.tgz
+tar -xzf fzf-multicolumn-*.tgz && install fzf-multicolumn ~/.local/bin/
+```
+
+Or build from source (Go 1.20+):
 
 ```sh
 git clone https://github.com/LPFchan/fzf-multicolumn.git
