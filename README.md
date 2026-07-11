@@ -63,7 +63,7 @@ choice=$(fzf-multicolumn --grid=3 --height=$(( max + 5 )) --reverse <<< "${(F)ro
 
 ### Limitations
 
-Grid cells are single-line: only the first line of a multi-line item is shown, and `--wrap`, `--gap`, jump mode, and mouse clicks are not grid-aware. If you need those, you probably want the regular list layout anyway.
+Grid cells are single-line: only the first line of a multi-line item is shown, and `--wrap`, `--gap`, and jump mode are not grid-aware. If you need those, you probably want the regular list layout anyway.
 
 ## Installation
 

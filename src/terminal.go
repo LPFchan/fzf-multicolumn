@@ -3887,6 +3887,31 @@ func (t *Terminal) gridColumnWidths(count int) []int {
 	return widths
 }
 
+// gridClickIndex maps window-local click coordinates to an item index in
+// grid mode, or -1 when the click lands past the last item.
+func (t *Terminal) gridClickIndex(my int, mx int, minY int) int {
+	row := my - minY
+	if row < 0 {
+		return -1
+	}
+	count := t.merger.Length()
+	widths := t.gridColumnWidths(count)
+	col := t.grid - 1
+	x := 0
+	for c := 0; c < t.grid; c++ {
+		x += widths[c]
+		if mx < x {
+			col = c
+			break
+		}
+	}
+	index := t.offset + row*t.grid + col
+	if index >= count {
+		return -1
+	}
+	return index
+}
+
 // printGridList renders the list window as a row-major grid of t.grid columns.
 // Grid cells cannot span multiple lines, so wrap/gap/multi-line features do
 // not apply here. Lines are fully redrawn on every pass and marked "other" so
@@ -8220,6 +8245,14 @@ func (t *Terminal) Loop() error {
 
 				// Double-click on an item
 				cy := prevLine.cy
+				if t.grid > 1 && my >= min {
+					if gcy := t.gridClickIndex(my, mx, min); gcy >= 0 {
+						cy = gcy
+					} else {
+						// Click past the last item of the grid
+						break
+					}
+				}
 				if me.Double && mx < t.window.Width()-1 {
 					// Double-click
 					if my >= min {
