@@ -118,6 +118,8 @@ Usage: fzf [options]
     --grid=COLS              Display items in a row-major grid of COLS columns.
                              Left/right arrow keys move the cursor within a row
                              (fzf-multicolumn extension)
+    --grid-gap=COLS          Minimum number of spaces between grid columns
+                             (default: 2)
     --jump-labels=CHARS      Label characters for jump mode
     --gutter=CHAR            Character used for the gutter column (default: '▌')
     --gutter-raw=CHAR        Character used for the gutter column in raw mode (default: '▖')
@@ -634,6 +636,7 @@ type Options struct {
 	Hscroll           bool
 	HscrollOff        int
 	Grid              int
+	GridGap           int
 	ScrollOff         int
 	FileWord          bool
 	InfoStyle         infoStyle
@@ -771,6 +774,7 @@ func defaultOptions() *Options {
 		Hscroll:      true,
 		HscrollOff:   10,
 		Grid:         0,
+		GridGap:      2,
 		ScrollOff:    3,
 		FileWord:     false,
 		InfoStyle:    infoDefault,
@@ -3003,6 +3007,15 @@ func parseOptions(index *int, opts *Options, allArgs []string) error {
 			opts.Grid = n
 		case "--no-grid":
 			opts.Grid = 0
+		case "--grid-gap":
+			n, err := nextInt("grid gap required")
+			if err != nil {
+				return err
+			}
+			if n < 1 {
+				return errors.New("grid gap must be a positive integer")
+			}
+			opts.GridGap = n
 		case "--scroll-off":
 			if opts.ScrollOff, err = nextInt("scroll offset required"); err != nil {
 				return err

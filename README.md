@@ -29,6 +29,7 @@ printf 'one\ntwo\nthree\nfour\nfive\nsix\n' | fzf-multicolumn --grid=3 --height=
 | ------ | ----------- |
 | `--grid=COLS` | Lay items out in a row-major grid of COLS columns (`--grid=1` and `--grid=0` mean a normal list) |
 | `--no-grid` | Disable grid mode |
+| `--grid-gap=COLS` | Minimum number of spaces between grid columns (default: 2) |
 
 ### New actions
 

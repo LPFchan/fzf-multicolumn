@@ -307,6 +307,7 @@ type Terminal struct {
 	hscroll              bool
 	hscrollOff           int
 	grid                 int
+	gridGap              int
 	scrollOff            int
 	gap                  int
 	gapLine              labelPrinter
@@ -1050,6 +1051,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 		hscroll:            opts.Hscroll,
 		hscrollOff:         opts.HscrollOff,
 		grid:               opts.Grid,
+		gridGap:            opts.GridGap,
 		scrollOff:          opts.ScrollOff,
 		pointer:            *opts.Pointer,
 		pointerLen:         uniseg.StringWidth(*opts.Pointer),
@@ -3826,10 +3828,8 @@ func (t *Terminal) gridRows() int {
 }
 
 // Per-cell decoration width (pointer + marker) plus the gap to the next cell
-const gridCellGap = 2
-
 func (t *Terminal) gridCellOverhead() int {
-	return t.pointerLen + t.markerLen + gridCellGap
+	return t.pointerLen + t.markerLen + t.gridGap
 }
 
 // firstLineRunes returns the first line of an item, which is all a grid cell
