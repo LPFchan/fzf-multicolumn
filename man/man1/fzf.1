@@ -724,6 +724,21 @@ Number of screen columns to keep to the right of the highlighted substring
 (default: 10). Setting it to a large value will cause the text to be positioned
 on the center of the screen.
 .TP
+.BI "\-\-grid=" "COLS"
+Display items in a row-major grid of COLS columns (fzf-multicolumn extension).
+Each column is sized to its widest matched item; when the columns do not fit
+on screen, the widest column is shrunk first. Up/down movements go by rows and
+stay in the same column (with \fB\-\-cycle\fR they wrap around within the
+column), and the left and right arrow keys are bound to the
+\fBgrid\-left\fR / \fBgrid\-right\fR actions that move within a row
+(\fBctrl\-b\fR / \fBctrl\-f\fR still move the cursor in the query).
+Grid cells are single-line: only the first line of a multi-line item is
+displayed, and \fB\-\-wrap\fR, \fB\-\-gap\fR, jump mode, and mouse clicks are
+not grid-aware.
+.TP
+.B "\-\-no\-grid"
+Disable grid mode
+.TP
 .BI "\-\-jump\-labels=" "CHARS"
 Label characters for \fBjump\fR mode.
 .TP
@@ -2078,6 +2093,8 @@ A key or an event can be bound to one or more of the following actions.
     \fBforward\-char\fR                 \fIctrl\-f  right\fR
     \fBforward\-subword\fR
     \fBforward\-word\fR                 \fIalt\-f   shift\-right alt\-right\fR
+    \fBgrid\-left\fR                    (move left within a grid row; \fIleft\fR when \fB\-\-grid\fR is set)
+    \fBgrid\-right\fR                   (move right within a grid row; \fIright\fR when \fB\-\-grid\fR is set)
     \fBignore\fR
     \fBjump\fR                         (EasyMotion-like 2-keystroke movement)
     \fBkill\-line\fR
