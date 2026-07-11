@@ -306,6 +306,7 @@ type Terminal struct {
 	keepRight            bool
 	hscroll              bool
 	hscrollOff           int
+	grid                 int
 	scrollOff            int
 	gap                  int
 	gapLine              labelPrinter
@@ -733,6 +734,8 @@ const (
 	actExcludeMulti
 	actAsync
 	actWait
+	actGridLeft
+	actGridRight
 )
 
 func (a actionType) Name() string {
@@ -1046,6 +1049,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 		keepRight:          opts.KeepRight,
 		hscroll:            opts.Hscroll,
 		hscrollOff:         opts.HscrollOff,
+		grid:               opts.Grid,
 		scrollOff:          opts.ScrollOff,
 		pointer:            *opts.Pointer,
 		pointerLen:         uniseg.StringWidth(*opts.Pointer),
@@ -1792,6 +1796,9 @@ func (t *Terminal) avgNumLines() int {
 }
 
 func (t *Terminal) getScrollbar() (int, int) {
+	if t.grid > 1 {
+		return getScrollbar(1, t.gridRows(), t.maxItems(), t.offset/t.grid)
+	}
 	return getScrollbar(t.avgNumLines(), t.merger.Length(), t.maxItems(), t.offset)
 }
 
@@ -3788,6 +3795,10 @@ func (t *Terminal) renderGapLine(line int, barRange [2]int, drawLine bool) {
 
 func (t *Terminal) printList() {
 	t.constrain()
+	if t.grid > 1 {
+		t.printGridList()
+		return
+	}
 	barLength, barStart := t.getScrollbar()
 
 	maxy := t.maxItems() - 1
@@ -3807,6 +3818,116 @@ func (t *Terminal) printList() {
 			t.renderEmptyLine(line, barRange)
 		}
 	}
+}
+
+// Number of rows needed to lay out all matched items in grid mode
+func (t *Terminal) gridRows() int {
+	return (t.merger.Length() + t.grid - 1) / t.grid
+}
+
+// printGridList renders the list window as a row-major grid of t.grid columns.
+// Grid cells cannot span multiple lines, so wrap/gap/multi-line features do
+// not apply here. Lines are fully redrawn on every pass and marked "other" so
+// the line-diffing of the regular renderer never sees stale grid content.
+func (t *Terminal) printGridList() {
+	barLength, barStart := t.getScrollbar()
+	numRows := t.maxItems()
+	startLine := t.promptLines() + t.visibleHeaderLinesInList()
+	count := t.merger.Length()
+	barRange := [2]int{startLine + barStart, startLine + barStart + barLength}
+	cellWidth := (t.window.Width() - t.barCol()) / t.grid
+	for row := 0; row < numRows; row++ {
+		line := startLine + row
+		t.move(line, 0, true)
+		t.markOtherLine(line)
+		if cellWidth > t.pointerLen+t.markerLen {
+			for col := 0; col < t.grid; col++ {
+				index := t.offset + row*t.grid + col
+				if index >= count {
+					break
+				}
+				t.move(line, col*cellWidth, false)
+				t.printGridCell(t.merger.Get(index), index, cellWidth)
+			}
+		}
+		t.printBar(line, true, barRange)
+	}
+}
+
+func (t *Terminal) printGridCell(result Result, index int, cellWidth int) {
+	item := result.item
+	current := index == t.cy
+	_, selected := t.selected[item.Index()]
+
+	if current {
+		if t.pointerLen > 0 {
+			t.window.CPrint(tui.ColCurrentPointer, t.pointer)
+		}
+	} else if t.pointerLen > 0 {
+		t.gutter(false, false)
+	}
+	if t.markerLen > 0 {
+		if selected {
+			if current {
+				t.window.CPrint(tui.ColCurrentMarker, t.marker)
+			} else {
+				t.window.CPrint(tui.ColMarker, t.marker)
+			}
+		} else {
+			t.window.Print(t.markerEmpty)
+		}
+	}
+
+	var colBase, colMatch tui.ColorPair
+	if current {
+		colBase = tui.ColCurrent
+		colMatch = tui.ColCurrentMatch
+	} else if selected {
+		colBase = tui.ColSelected
+		colMatch = tui.ColSelectedMatch
+	} else {
+		colBase = tui.ColNormal
+		colMatch = tui.ColMatch
+	}
+
+	matchOffsets := []Offset{}
+	var pos *[]int
+	if t.resultMerger.pattern != nil {
+		_, matchOffsets, pos = t.resultMerger.pattern.MatchItem(item, true, t.slab)
+	}
+	charOffsets := matchOffsets
+	if pos != nil {
+		runes := item.text.ToRunes()
+		charOffsets = make([]Offset, len(*pos))
+		for idx, p := range *pos {
+			gr := uniseg.NewGraphemes(string(runes[p:]))
+			w := 1
+			for gr.Next() {
+				w = len(gr.Runes())
+				break
+			}
+			charOffsets[idx] = Offset{int32(p), int32(p + w)}
+		}
+		slices.SortFunc(charOffsets, compareOffsets)
+	}
+	allOffsets := result.colorOffsets(charOffsets, nil, t.theme, colBase, colMatch, t.nthAttr, 0, false)
+
+	// One-space gap between cells; only the first line of a multi-line item is shown
+	maxTextWidth := cellWidth - t.pointerLen - t.markerLen - 1
+	text := item.text.ToRunes()
+	for idx, r := range text {
+		if r == '\n' {
+			text = text[:idx]
+			break
+		}
+	}
+	if t.displayWidthWithLimit(text, 0, maxTextWidth) > maxTextWidth {
+		ellipsis, ellipsisWidth := util.Truncate(t.ellipsis, maxTextWidth)
+		trimmed, _ := t.trimRight(text, maxTextWidth-ellipsisWidth)
+		// Copy before appending: trimmed aliases the item's rune storage
+		text = append(append(make([]rune, 0, len(trimmed)+len(ellipsis)), trimmed...), ellipsis...)
+	}
+	t.printColoredString(t.window, text, allOffsets, colBase)
 }
 
 func (t *Terminal) printBar(lineNum int, forceRedraw bool, barRange [2]int) bool {
@@ -7305,10 +7426,29 @@ func (t *Terminal) Loop() error {
 							t.vset(prevCy)
 						}
 					}
+				} else if t.grid > 1 {
+					t.gridVmove(dir, true)
 				} else {
 					t.vmove(dir, true)
 				}
 				req(reqList)
+			case actGridLeft, actGridRight:
+				if t.grid > 1 && t.merger.Length() > 0 {
+					diff := 1
+					if a.t == actGridLeft {
+						diff = -1
+					}
+					dest := t.cy + diff
+					if t.cycle {
+						if dest < 0 {
+							dest = t.merger.Length() - 1
+						} else if dest >= t.merger.Length() {
+							dest = 0
+						}
+					}
+					t.vset(dest)
+					req(reqList)
+				}
 			case actToggleRaw, actEnableRaw, actDisableRaw:
 				prevRaw := t.raw
 				newRaw := t.raw
@@ -7464,6 +7604,11 @@ func (t *Terminal) Loop() error {
 				}
 				// Move at least one line even in a very short window
 				linesToMove = max(1, linesToMove)
+
+				// In grid mode, each line holds t.grid items
+				if t.grid > 1 {
+					linesToMove *= t.grid
+				}
 
 				// Determine the direction of the movement
 				direction := -1
@@ -8344,6 +8489,10 @@ func (t *Terminal) Loop() error {
 }
 
 func (t *Terminal) constrain() {
+	if t.grid > 1 {
+		t.constrainGrid()
+		return
+	}
 	// count of items to display allowed by filtering
 	count := t.merger.Length()
 	maxLines := t.maxItems()
@@ -8443,6 +8592,58 @@ func (t *Terminal) constrain() {
 			break
 		}
 	}
+}
+
+// Grid-mode counterpart of constrain: the offset is kept row-aligned
+// (a multiple of t.grid) and scrolling is performed in whole rows.
+func (t *Terminal) constrainGrid() {
+	count := t.merger.Length()
+	t.cy = util.Constrain(t.cy, 0, max(0, count-1))
+	numRows := t.maxItems()
+	if numRows == 0 || count == 0 {
+		t.offset = 0
+		return
+	}
+	totalRows := t.gridRows()
+	curRow := t.cy / t.grid
+	offsetRow := t.offset / t.grid
+	minOffsetRow := max(curRow-numRows+1, 0)
+	maxOffsetRow := max(min(totalRows-numRows, curRow), 0)
+	t.offset = util.Constrain(offsetRow, minOffsetRow, maxOffsetRow) * t.grid
+}
+
+// Grid-mode counterpart of vmove: moves the cursor by o rows, staying in the
+// same column. With --cycle, moving past the first/last row wraps around
+// within the column.
+func (t *Terminal) gridVmove(o int, allowCycle bool) bool {
+	if t.layout != layoutDefault {
+		o *= -1
+	}
+	count := t.merger.Length()
+	if count == 0 {
+		return false
+	}
+	dest := t.cy + o*t.grid
+	if dest < 0 {
+		// Cursor is on the first row
+		if !(t.cycle && allowCycle) {
+			return false
+		}
+		lastRowStart := ((count - 1) / t.grid) * t.grid
+		dest = min(lastRowStart+t.cy%t.grid, count-1)
+	} else if dest >= count {
+		if t.cy/t.grid == (count-1)/t.grid {
+			// Already on the last row
+			if !(t.cycle && allowCycle) {
+				return false
+			}
+			dest = t.cy % t.grid
+		} else {
+			// Clamp to the last item of a partial final row
+			dest = count - 1
+		}
+	}
+	return t.vset(dest)
 }
 
 // Returns true if the cursor position is successfully updated

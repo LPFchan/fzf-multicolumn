@@ -115,6 +115,9 @@ Usage: fzf [options]
     --no-hscroll             Disable horizontal scroll
     --hscroll-off=COLS       Number of screen columns to keep to the right of the
                              highlighted substring (default: 10)
+    --grid=COLS              Display items in a row-major grid of COLS columns.
+                             Left/right arrow keys move the cursor within a row
+                             (fzf-multicolumn extension)
     --jump-labels=CHARS      Label characters for jump mode
     --gutter=CHAR            Character used for the gutter column (default: '▌')
     --gutter-raw=CHAR        Character used for the gutter column in raw mode (default: '▖')
@@ -630,6 +633,7 @@ type Options struct {
 	KeepRight         bool
 	Hscroll           bool
 	HscrollOff        int
+	Grid              int
 	ScrollOff         int
 	FileWord          bool
 	InfoStyle         infoStyle
@@ -766,6 +770,7 @@ func defaultOptions() *Options {
 		KeepRight:    false,
 		Hscroll:      true,
 		HscrollOff:   10,
+		Grid:         0,
 		ScrollOff:    3,
 		FileWord:     false,
 		InfoStyle:    infoDefault,
@@ -1778,6 +1783,10 @@ func parseActionList(masked string, original string, prevActions []*action, putA
 			appendAction(actReplaceQuery)
 		case "backward-char":
 			appendAction(actBackwardChar)
+		case "grid-left":
+			appendAction(actGridLeft)
+		case "grid-right":
+			appendAction(actGridRight)
 		case "backward-delete-char":
 			appendAction(actBackwardDeleteChar)
 		case "backward-delete-char/eof":
@@ -2979,6 +2988,21 @@ func parseOptions(index *int, opts *Options, allArgs []string) error {
 			if opts.HscrollOff, err = nextInt("hscroll offset required"); err != nil {
 				return err
 			}
+		case "--grid":
+			n, err := nextInt("number of grid columns required")
+			if err != nil {
+				return err
+			}
+			if n < 0 {
+				return errors.New("number of grid columns must be non-negative")
+			}
+			if n == 1 {
+				// A single column is just the normal list
+				n = 0
+			}
+			opts.Grid = n
+		case "--no-grid":
+			opts.Grid = 0
 		case "--scroll-off":
 			if opts.ScrollOff, err = nextInt("scroll offset required"); err != nil {
 				return err
@@ -3800,6 +3824,14 @@ func postProcessOptions(opts *Options) error {
 
 	// Extend the default key map
 	keymap := defaultKeymap()
+
+	// In grid mode, left/right arrows navigate the grid by default.
+	// CTRL-B / CTRL-F still move the cursor in the query, and explicit
+	// --bind definitions below override these.
+	if opts.Grid > 1 {
+		keymap[tui.Left.AsEvent()] = toActions(actGridLeft)
+		keymap[tui.Right.AsEvent()] = toActions(actGridRight)
+	}
 	for key, actions := range opts.Keymap {
 		reordered := []*action{}
 		for _, act := range actions {
