@@ -3844,6 +3844,22 @@ func gridCellRunes(item *Item) []rune {
 	return text
 }
 
+// gridBlankAt reports whether the matched item at the given index is a
+// placeholder cell. In grid mode, whitespace-only items exist only to pad
+// short columns into alignment: they are not rendered, the cursor skips
+// over them, and clicks on them are ignored.
+func (t *Terminal) gridBlankAt(index int) bool {
+	if index < 0 || index >= t.merger.Length() {
+		return true
+	}
+	for _, r := range gridCellRunes(t.merger.Get(index).item) {
+		if r != ' ' && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
 // gridColumnWidths sizes each column to its widest matched item (dynamic
 // spacing) instead of an even 1/N split. When the columns don't fit, the
 // widest column is shrunk first so narrow columns keep their alignment.
@@ -3906,7 +3922,7 @@ func (t *Terminal) gridClickIndex(my int, mx int, minY int) int {
 		}
 	}
 	index := t.offset + row*t.grid + col
-	if index >= count {
+	if index >= count || t.gridBlankAt(index) {
 		return -1
 	}
 	return index
@@ -3934,7 +3950,7 @@ func (t *Terminal) printGridList() {
 			if index >= count {
 				break
 			}
-			if widths[col] > overhead {
+			if widths[col] > overhead && !t.gridBlankAt(index) {
 				t.move(line, x, false)
 				t.printGridCell(t.merger.Get(index), index, widths[col]-overhead)
 			}
@@ -7521,16 +7537,27 @@ func (t *Terminal) Loop() error {
 					if a.t == actGridLeft {
 						diff = -1
 					}
-					dest := t.cy + diff
-					if t.cycle {
-						if dest < 0 {
-							dest = t.merger.Length() - 1
-						} else if dest >= t.merger.Length() {
-							dest = 0
+					// Step over placeholder cells; stop if only
+					// placeholders remain in this direction.
+					count := t.merger.Length()
+					dest := t.cy
+					for range count {
+						dest += diff
+						if t.cycle {
+							if dest < 0 {
+								dest = count - 1
+							} else if dest >= count {
+								dest = 0
+							}
+						} else if dest < 0 || dest >= count {
+							break
+						}
+						if !t.gridBlankAt(dest) {
+							t.vset(dest)
+							req(reqList)
+							break
 						}
 					}
-					t.vset(dest)
-					req(reqList)
 				}
 			case actToggleRaw, actEnableRaw, actDisableRaw:
 				prevRaw := t.raw
@@ -8690,6 +8717,20 @@ func (t *Terminal) constrain() {
 func (t *Terminal) constrainGrid() {
 	count := t.merger.Length()
 	t.cy = util.Constrain(t.cy, 0, max(0, count-1))
+	// A reflow (e.g. the query being cleared) can strand the cursor on a
+	// placeholder cell; settle it on the nearest real item instead.
+	if count > 0 && t.gridBlankAt(t.cy) {
+		for d := 1; d < count; d++ {
+			if t.cy-d >= 0 && !t.gridBlankAt(t.cy-d) {
+				t.cy -= d
+				break
+			}
+			if t.cy+d < count && !t.gridBlankAt(t.cy+d) {
+				t.cy += d
+				break
+			}
+		}
+	}
 	numRows := t.maxItems()
 	if numRows == 0 || count == 0 {
 		t.offset = 0
@@ -8705,7 +8746,8 @@ func (t *Terminal) constrainGrid() {
 
 // Grid-mode counterpart of vmove: moves the cursor by o rows, staying in the
 // same column. With --cycle, moving past the first/last row wraps around
-// within the column.
+// within the column. Placeholder cells (see gridBlankAt) are skipped; if
+// only placeholders lie in the movement direction, the cursor stays put.
 func (t *Terminal) gridVmove(o int, allowCycle bool) bool {
 	if t.layout != layoutDefault {
 		o *= -1
@@ -8714,27 +8756,46 @@ func (t *Terminal) gridVmove(o int, allowCycle bool) bool {
 	if count == 0 {
 		return false
 	}
-	dest := t.cy + o*t.grid
+	pos := t.cy
+	for range t.gridRows() {
+		dest, ok := t.gridVstep(pos, o, allowCycle)
+		if !ok {
+			return false
+		}
+		if !t.gridBlankAt(dest) {
+			return t.vset(dest)
+		}
+		pos = dest
+	}
+	return false
+}
+
+// gridVstep computes a single o-row move from pos within its column,
+// wrapping when --cycle allows it. Returns false when the move would fall
+// off a non-cycling edge.
+func (t *Terminal) gridVstep(pos int, o int, allowCycle bool) (int, bool) {
+	count := t.merger.Length()
+	dest := pos + o*t.grid
 	if dest < 0 {
 		// Cursor is on the first row
 		if !(t.cycle && allowCycle) {
-			return false
+			return pos, false
 		}
 		lastRowStart := ((count - 1) / t.grid) * t.grid
-		dest = min(lastRowStart+t.cy%t.grid, count-1)
+		dest = min(lastRowStart+pos%t.grid, count-1)
 	} else if dest >= count {
-		if t.cy/t.grid == (count-1)/t.grid {
+		if pos/t.grid == (count-1)/t.grid {
 			// Already on the last row
 			if !(t.cycle && allowCycle) {
-				return false
+				return pos, false
 			}
-			dest = t.cy % t.grid
+			dest = pos % t.grid
 		} else {
 			// Clamp to the last item of a partial final row
 			dest = count - 1
 		}
 	}
-	return t.vset(dest)
+	return dest, true
 }
 
 // Returns true if the cursor position is successfully updated

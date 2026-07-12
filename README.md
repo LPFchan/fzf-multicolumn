@@ -46,6 +46,7 @@ printf 'one\ntwo\nthree\nfour\nfive\nsix\n' | fzf-multicolumn --grid=3 --height=
 - **Column-preserving vertical movement** — `up`/`down` move by whole rows and stay in the same column; with `--cycle` they wrap around within the column. `page-up`/`page-down` move by pages of rows.
 - **Live reflow** — typing a query reflows the matched items through the grid, with per-character match highlighting inside each cell.
 - **Row-aligned scrolling** — the scroll offset is kept row-aligned and the scrollbar tracks rows.
+- **Placeholder cells** — whitespace-only items are treated as blank padding: they render as empty space, the cursor skips over them, and mouse clicks on them are ignored. This is what makes semantic columns (below) work — short columns are padded with `' '` items that can never be focused or selected.
 - Multi-select markers, `--layout=default|reverse`, `--header`, `--border`, `--height`, and preview windows all work as usual.
 
 ### Semantic columns

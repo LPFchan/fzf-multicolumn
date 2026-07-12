@@ -732,6 +732,9 @@ stay in the same column (with \fB\-\-cycle\fR they wrap around within the
 column), and the left and right arrow keys are bound to the
 \fBgrid\-left\fR / \fBgrid\-right\fR actions that move within a row
 (\fBctrl\-b\fR / \fBctrl\-f\fR still move the cursor in the query).
+Whitespace-only items are treated as placeholder cells that pad short
+columns: they are not rendered, cursor movement skips over them, and mouse
+clicks on them are ignored.
 Grid cells are single-line: only the first line of a multi-line item is
 displayed, and \fB\-\-wrap\fR, \fB\-\-gap\fR, and jump mode are not
 grid-aware.
