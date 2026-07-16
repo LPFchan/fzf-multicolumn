@@ -30,6 +30,7 @@ printf 'one\ntwo\nthree\nfour\nfive\nsix\n' | fzf-multicolumn --grid=3 --height=
 | `--grid=COLS` | Lay items out in a row-major grid of COLS columns (`--grid=1` and `--grid=0` mean a normal list) |
 | `--no-grid` | Disable grid mode |
 | `--grid-gap=COLS` | Minimum number of spaces between grid columns (default: 2) |
+| `--grid-span-prefix=PREFIX` | Opt in to per-record track spans encoded as `PREFIX`*N*`PREFIX`*payload* |
 
 ### New actions
 
@@ -40,10 +41,29 @@ printf 'one\ntwo\nthree\nfour\nfive\nsix\n' | fzf-multicolumn --grid=3 --height=
 
 `ctrl-b` / `ctrl-f` still move the cursor inside the query, and explicit `--bind` definitions override the grid defaults.
 
+### Spanning grid tracks
+
+Spans are opt-in, so existing input is unchanged unless a prefix is configured.
+For example, `--grid=6 --grid-span-prefix=@@` interprets `@@5@@details` as
+`details` occupying five consecutive tracks:
+
+```sh
+printf '%s\n' '[ ]' '@@5@@Module details' '[*]' '@@5@@Another module' |
+  fzf-multicolumn --grid=6 --grid-span-prefix=@@
+```
+
+The marker is removed before ANSI processing, field transforms, matching,
+preview placeholders, and output (including `--filter`, `--accept-nth`,
+`--read0`, and reload input). Complete markers require a positive decimal span;
+span zero, overflow, and spans wider than `--grid` are errors. The prefix must
+be nonempty and cannot begin with an ASCII digit. Incomplete or
+otherwise malformed markers remain literal. Items are placed left-to-right in
+input order and move to the next row when their complete span does not fit.
+
 ### Behavior
 
-- **Dynamic column widths** — each column is sized to its widest matched item rather than an even 1/N split. When the columns don't fit the window, the widest column is shrunk first (its cells get ellipsis-truncated). Lists over 4096 items fall back to the even split so rendering stays O(visible).
-- **Column-preserving vertical movement** — `up`/`down` move by whole rows and stay in the same column; with `--cycle` they wrap around within the column. `page-up`/`page-down` move by pages of rows.
+- **Dynamic track widths** — span-1 cells establish per-track widths, while spanning cells impose aggregate requirements across all covered tracks. When the grid does not fit, tracks shrink without splitting a cell's decorations; extremely narrow terminals collapse whole tracks. Lists over 4096 items skip text measurement but retain the same renderability floors and collapse rules.
+- **Geometric navigation** — `left`/`right` traverse selectable cells in the current logical row. `up`/`down` choose an overlapping cell in the adjacent row, or the nearest cell when none overlaps; with `--cycle`, vertical movement wraps between logical rows. Page and offset movement are measured in logical rows. Jump labels are assigned only to visible selectable placements, skipping inert placeholders.
 - **Live reflow** — typing a query reflows the matched items through the grid, with per-character match highlighting inside each cell.
 - **Row-aligned scrolling** — the scroll offset is kept row-aligned and the scrollbar tracks rows.
 - **Placeholder cells** — whitespace-only items are treated as blank padding: they render as empty space, the cursor skips over them, and mouse clicks on them are ignored. This is what makes semantic columns (below) work — short columns are padded with `' '` items that can never be focused or selected.

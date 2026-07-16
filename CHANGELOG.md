@@ -1,6 +1,15 @@
 CHANGELOG
 =========
 
+Unreleased (fzf-multicolumn)
+----------------------------
+- Added opt-in `--grid-span-prefix=PREFIX` records for per-item grid track spans.
+  Span metadata is stripped at ingestion from matching, display, placeholders,
+  field transforms, filtering, reloads, and selected output.
+- Grid rendering, sizing, scrolling, mouse hit-testing, and cursor navigation now
+  use explicit row-major placements, while span-1 and whitespace-placeholder
+  behavior remains compatible.
+
 0.74.0
 ------
 _Release highlights: https://junegunn.github.io/fzf/releases/0.74.0/_

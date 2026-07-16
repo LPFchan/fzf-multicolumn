@@ -726,10 +726,13 @@ on the center of the screen.
 .TP
 .BI "\-\-grid=" "COLS"
 Display items in a row-major grid of COLS columns (fzf-multicolumn extension).
-Each column is sized to its widest matched item; when the columns do not fit
-on screen, the widest column is shrunk first. Up/down movements go by rows and
-stay in the same column (with \fB\-\-cycle\fR they wrap around within the
-column), and the left and right arrow keys are bound to the
+Span-1 cells establish per-track widths, while spanning cells impose aggregate
+requirements across all covered tracks. When the grid does not fit, tracks
+shrink without splitting a cell's decorations; extremely narrow terminals
+collapse whole tracks. Lists over 4096 items skip text measurement but retain
+the same renderability floors. Up/down movements go by logical rows and choose a cell overlapping the current
+horizontal anchor, or the nearest cell when none overlaps (with
+\fB\-\-cycle\fR they wrap between logical rows), and the left and right arrow keys are bound to the
 \fBgrid\-left\fR / \fBgrid\-right\fR actions that move within a row
 (\fBctrl\-b\fR / \fBctrl\-f\fR still move the cursor in the query).
 Whitespace-only items are treated as placeholder cells that pad short
@@ -744,6 +747,15 @@ Disable grid mode
 .TP
 .BI "\-\-grid\-gap=" "COLS"
 Minimum number of spaces between grid columns (default: 2)
+.TP
+.BI "\-\-grid\-span\-prefix=" "PREFIX"
+Opt in to per-record grid spans. With a prefix such as \fB@@\fR, an input
+record \fB@@5@@payload\fR occupies five consecutive grid tracks. The marker is
+removed before matching, display, preview placeholders, field transforms, and
+output. Complete markers require a positive decimal span no wider than
+\fB\-\-grid\fR; malformed markers remain literal. An item that does not fit in
+the remaining tracks starts the next logical row. This option requires grid
+mode and a nonempty prefix that does not begin with an ASCII digit.
 .TP
 .BI "\-\-jump\-labels=" "CHARS"
 Label characters for \fBjump\fR mode.

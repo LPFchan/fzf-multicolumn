@@ -2,10 +2,13 @@
 package fzf
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -49,6 +52,44 @@ func buildItemTransformer(opts *Options) func(*Item) string {
 	return func(item *Item) string {
 		return item.AsString(opts.Ansi)
 	}
+}
+
+func parseGridSpanRecord(data []byte, prefix string, grid int) ([]byte, int, error) {
+	prefixBytes := []byte(prefix)
+	if len(prefixBytes) == 0 || !bytes.HasPrefix(data, prefixBytes) {
+		return data, 1, nil
+	}
+	digits := data[len(prefixBytes):]
+	end := 0
+	for end < len(digits) && digits[end] >= '0' && digits[end] <= '9' {
+		end++
+	}
+	if end == 0 || !bytes.HasPrefix(digits[end:], prefixBytes) {
+		return data, 1, nil
+	}
+	span, err := strconv.ParseUint(string(digits[:end]), 10, 0)
+	if err != nil {
+		return nil, 0, fmt.Errorf("invalid grid span %q: value overflows", digits[:end])
+	}
+	if span == 0 {
+		return nil, 0, errors.New("grid span must be positive")
+	}
+	if span > uint64(grid) {
+		return nil, 0, fmt.Errorf("grid span %d exceeds grid width %d", span, grid)
+	}
+	return digits[end+len(prefixBytes):], int(span), nil
+}
+
+func dispatchRuntimeReload(request searchRequest, reading bool, reader *Reader, restart func(commandSpec, []string)) (*commandSpec, []string) {
+	if request.command == nil {
+		return nil, nil
+	}
+	if reading {
+		reader.terminate()
+		return request.command, request.environ
+	}
+	restart(*request.command, request.environ)
+	return nil, nil
 }
 
 // Run starts fzf
@@ -117,6 +158,34 @@ func Run(opts *Options) (int, error) {
 	cache := NewChunkCache()
 	var chunkList *ChunkList
 	var itemIndex int32
+	var ingestionErr error
+	var ingestionErrMutex sync.Mutex
+	parseGridSpan := func(data []byte) ([]byte, int, error) {
+		return parseGridSpanRecord(data, opts.GridSpanPrefix, opts.Grid)
+	}
+	prepareItem := func(item *Item, data []byte) ([]byte, bool) {
+		stripped, span, err := parseGridSpan(data)
+		if err != nil {
+			ingestionErrMutex.Lock()
+			if ingestionErr == nil {
+				ingestionErr = err
+			}
+			ingestionErrMutex.Unlock()
+			return nil, false
+		}
+		item.span = span
+		return stripped, true
+	}
+	getIngestionErr := func() error {
+		ingestionErrMutex.Lock()
+		defer ingestionErrMutex.Unlock()
+		return ingestionErr
+	}
+	clearIngestionErr := func() {
+		ingestionErrMutex.Lock()
+		ingestionErr = nil
+		ingestionErrMutex.Unlock()
+	}
 	// transformItem applies with-nth transformation to an item's raw data.
 	// It handles ANSI token propagation using prevLineAnsiState for cross-line continuity.
 	transformItem := func(item *Item, data []byte, transformer func([]Token, int32) string, index int32) {
@@ -155,6 +224,11 @@ func Run(opts *Options) (int, error) {
 	var nthTransformer func([]Token, int32) string
 	if opts.WithNth == nil {
 		chunkList = NewChunkList(cache, func(item *Item, data []byte) bool {
+			var ok bool
+			data, ok = prepareItem(item, data)
+			if !ok {
+				return false
+			}
 			item.text, item.colors = ansiProcessor(data)
 			item.text.Index = itemIndex
 			itemIndex++
@@ -163,6 +237,11 @@ func Run(opts *Options) (int, error) {
 	} else {
 		nthTransformer = opts.WithNth(opts.Delimiter)
 		chunkList = NewChunkList(cache, func(item *Item, data []byte) bool {
+			var ok bool
+			data, ok = prepareItem(item, data)
+			if !ok {
+				return false
+			}
 			if nthTransformer == nil {
 				item.text, item.colors = ansiProcessor(data)
 			} else {
@@ -204,6 +283,7 @@ func Run(opts *Options) (int, error) {
 		reader = NewReader(func(data []byte) bool {
 			return chunkList.Push(data)
 		}, eventBox, executor, opts.ReadZero, opts.Filter == nil)
+		reader.SetErrorCheck(getIngestionErr)
 
 		ingestionStart = time.Now()
 		readyChan := make(chan bool)
@@ -288,10 +368,17 @@ func Run(opts *Options) (int, error) {
 					}
 					return false
 				}, eventBox, executor, opts.ReadZero, false)
+			reader.SetErrorCheck(getIngestionErr)
 			reader.ReadSource(opts.Input, opts.WalkerRoot, opts.WalkerOpts, opts.WalkerSkip, initialReload, initialEnv, nil)
+			if err := getIngestionErr(); err != nil {
+				return ExitError, err
+			}
 		} else {
 			eventBox.Unwatch(EvtReadNew)
 			eventBox.WaitFor(EvtReadFin)
+			if err := getIngestionErr(); err != nil {
+				return ExitError, err
+			}
 			ingestionTime := time.Since(ingestionStart)
 
 			// NOTE: Streaming filter is inherently not compatible with --tail
@@ -370,6 +457,9 @@ func Run(opts *Options) (int, error) {
 	}
 	deferred := opts.Select1 || opts.Exit0 || opts.Sync
 	go terminal.Loop()
+	if opts.runtimeTestHook != nil {
+		opts.runtimeTestHook(terminal)
+	}
 	if !deferred && !heightUnknown {
 		// Start right away
 		terminal.startChan <- fitpad{-1, -1}
@@ -405,6 +495,7 @@ func Run(opts *Options) (int, error) {
 		if !useSnapshot {
 			clearDenylist()
 		}
+		clearIngestionErr()
 		reading = true
 		headerUpdated = false
 		startTick = ticks
@@ -444,6 +535,18 @@ func Run(opts *Options) (int, error) {
 					stop = true
 					return
 				case EvtReadNew, EvtReadFin:
+					if opts.runtimeReadHook != nil {
+						opts.runtimeReadHook(evt, useSnapshot)
+					}
+					if ingestionErr := getIngestionErr(); ingestionErr != nil {
+						if reading {
+							reader.terminate()
+						}
+						exitCode = ExitError
+						err = ingestionErr
+						stop = true
+						return
+					}
 					if evt == EvtReadFin && nextCommand != nil {
 						restart(*nextCommand, nextEnviron)
 						nextCommand = nil
@@ -478,6 +581,9 @@ func Run(opts *Options) (int, error) {
 					}
 					if !useSnapshot || evt == EvtReadFin {
 						matcher.Reset(snapshot, input(), false, !reading, sort, snapshotRevision)
+					}
+					if opts.runtimeReadDoneHook != nil {
+						opts.runtimeReadDoneHook(evt, useSnapshot)
 					}
 
 				case EvtSearchNew:
@@ -550,13 +656,7 @@ func Run(opts *Options) (int, error) {
 						}
 					}
 					if command != nil {
-						if reading {
-							reader.terminate()
-							nextCommand = command
-							nextEnviron = environ
-						} else {
-							restart(*command, environ)
-						}
+						nextCommand, nextEnviron = dispatchRuntimeReload(searchRequest{command: command, environ: environ}, reading, reader, restart)
 					}
 					if !changed {
 						break
@@ -625,6 +725,9 @@ func Run(opts *Options) (int, error) {
 							}
 						}
 						terminal.UpdateList(val)
+						if opts.runtimePublishHook != nil {
+							opts.runtimePublishHook(val.final())
+						}
 					}
 				}
 			}

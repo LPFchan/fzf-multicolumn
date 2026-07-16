@@ -120,6 +120,8 @@ Usage: fzf [options]
                              (fzf-multicolumn extension)
     --grid-gap=COLS          Minimum number of spaces between grid columns
                              (default: 2)
+    --grid-span-prefix=STR   Parse STRNSTR prefixes as N-track grid spans
+                             (fzf-multicolumn extension)
     --jump-labels=CHARS      Label characters for jump mode
     --gutter=CHAR            Character used for the gutter column (default: '▌')
     --gutter-raw=CHAR        Character used for the gutter column in raw mode (default: '▖')
@@ -582,130 +584,136 @@ type walkerOpts struct {
 
 // Options stores the values of command-line options
 type Options struct {
-	Input             chan string
-	Output            chan string
-	NoWinpty          bool
-	Tmux              *tmuxOptions
-	ForceTtyIn        bool
-	ProxyScript       string
-	Bash              bool
-	Zsh               bool
-	Fish              bool
-	Nushell           bool
-	Man               bool
-	Fuzzy             bool
-	FuzzyAlgo         algo.Algo
-	Scheme            string
-	Extended          bool
-	Phony             bool
-	Inputless         bool
-	Case              Case
-	Normalize         bool
-	Nth               []Range
-	FreezeLeft        int
-	FreezeRight       int
-	WithNth           func(Delimiter) func([]Token, int32) string
-	WithNthExpr       string
-	AcceptNth         func(Delimiter) func([]Token, int32) string
-	Delimiter         Delimiter
-	Sort              int
-	Raw               bool
-	Track             trackOption
-	IdNth             []Range
-	Tac               bool
-	Tail              int
-	Criteria          []criterion
-	Multi             int
-	Ansi              bool
-	Mouse             bool
-	BaseTheme         *tui.ColorTheme
-	Theme             *tui.ColorTheme
-	Black             bool
-	Bold              bool
-	Height            heightSpec
-	MinHeight         int
-	Layout            layoutType
-	Cycle             bool
-	Wrap              bool
-	WrapWord          bool
-	WrapSign          *string
-	PreviewWrapSign   *string
-	MultiLine         bool
-	CursorLine        bool
-	KeepRight         bool
-	Hscroll           bool
-	HscrollOff        int
-	Grid              int
-	GridGap           int
-	ScrollOff         int
-	FileWord          bool
-	InfoStyle         infoStyle
-	InfoPrefix        string
-	InfoCommand       string
-	Ghost             string
-	Separator         *string
-	JumpLabels        string
-	Prompt            string
-	Gutter            *string
-	GutterRaw         *string
-	Pointer           *string
-	Marker            *string
-	MarkerMulti       *[3]string
-	Query             string
-	Select1           bool
-	Exit0             bool
-	Filter            *string
-	ToggleSort        bool
-	Expect            map[tui.Event]string
-	Keymap            map[tui.Event][]*action
-	Preview           previewOpts
-	PrintQuery        bool
-	ReadZero          bool
-	Printer           func(string)
-	PrintSep          string
-	Sync              bool
-	History           *History
-	Header            []string
-	HeaderLines       int
-	HeaderFirst       bool
-	Footer            []string
-	Gap               int
-	GapLine           *string
-	Ellipsis          *string
-	Scrollbar         *string
-	Margin            [4]sizeSpec
-	Padding           [4]sizeSpec
-	BorderShape       tui.BorderShape
-	ListBorderShape   tui.BorderShape
-	InputBorderShape  tui.BorderShape
-	HeaderBorderShape tui.BorderShape
-	HeaderLinesShape  tui.BorderShape
-	FooterBorderShape tui.BorderShape
-	InputLabel        labelOpts
-	HeaderLabel       labelOpts
-	FooterLabel       labelOpts
-	BorderLabel       labelOpts
-	ListLabel         labelOpts
-	PreviewLabel      labelOpts
-	Unicode           bool
-	Ambidouble        bool
-	Tabstop           int
-	WithShell         string
-	ListenAddr        *listenAddress
-	Unsafe            bool
-	ClearOnExit       bool
-	WalkerOpts        walkerOpts
-	WalkerRoot        []string
-	WalkerSkip        []string
-	Version           bool
-	Help              bool
-	Threads           int
-	Bench             time.Duration
-	CPUProfile        string
-	MEMProfile        string
-	BlockProfile      string
-	MutexProfile      string
-	TtyDefault        string
+	Input               chan string
+	Output              chan string
+	NoWinpty            bool
+	Tmux                *tmuxOptions
+	ForceTtyIn          bool
+	ProxyScript         string
+	Bash                bool
+	Zsh                 bool
+	Fish                bool
+	Nushell             bool
+	Man                 bool
+	Fuzzy               bool
+	FuzzyAlgo           algo.Algo
+	Scheme              string
+	Extended            bool
+	Phony               bool
+	Inputless           bool
+	Case                Case
+	Normalize           bool
+	Nth                 []Range
+	FreezeLeft          int
+	FreezeRight         int
+	WithNth             func(Delimiter) func([]Token, int32) string
+	WithNthExpr         string
+	AcceptNth           func(Delimiter) func([]Token, int32) string
+	Delimiter           Delimiter
+	Sort                int
+	Raw                 bool
+	Track               trackOption
+	IdNth               []Range
+	Tac                 bool
+	Tail                int
+	Criteria            []criterion
+	Multi               int
+	Ansi                bool
+	Mouse               bool
+	BaseTheme           *tui.ColorTheme
+	Theme               *tui.ColorTheme
+	Black               bool
+	Bold                bool
+	Height              heightSpec
+	MinHeight           int
+	Layout              layoutType
+	Cycle               bool
+	Wrap                bool
+	WrapWord            bool
+	WrapSign            *string
+	PreviewWrapSign     *string
+	MultiLine           bool
+	CursorLine          bool
+	KeepRight           bool
+	Hscroll             bool
+	HscrollOff          int
+	Grid                int
+	GridGap             int
+	GridSpanPrefix      string
+	ScrollOff           int
+	FileWord            bool
+	InfoStyle           infoStyle
+	InfoPrefix          string
+	InfoCommand         string
+	Ghost               string
+	Separator           *string
+	JumpLabels          string
+	Prompt              string
+	Gutter              *string
+	GutterRaw           *string
+	Pointer             *string
+	Marker              *string
+	MarkerMulti         *[3]string
+	Query               string
+	Select1             bool
+	Exit0               bool
+	Filter              *string
+	ToggleSort          bool
+	Expect              map[tui.Event]string
+	Keymap              map[tui.Event][]*action
+	Preview             previewOpts
+	PrintQuery          bool
+	ReadZero            bool
+	Printer             func(string)
+	PrintSep            string
+	Sync                bool
+	History             *History
+	Header              []string
+	HeaderLines         int
+	HeaderFirst         bool
+	Footer              []string
+	Gap                 int
+	GapLine             *string
+	Ellipsis            *string
+	Scrollbar           *string
+	Margin              [4]sizeSpec
+	Padding             [4]sizeSpec
+	BorderShape         tui.BorderShape
+	ListBorderShape     tui.BorderShape
+	InputBorderShape    tui.BorderShape
+	HeaderBorderShape   tui.BorderShape
+	HeaderLinesShape    tui.BorderShape
+	FooterBorderShape   tui.BorderShape
+	InputLabel          labelOpts
+	HeaderLabel         labelOpts
+	FooterLabel         labelOpts
+	BorderLabel         labelOpts
+	ListLabel           labelOpts
+	PreviewLabel        labelOpts
+	Unicode             bool
+	Ambidouble          bool
+	Tabstop             int
+	WithShell           string
+	ListenAddr          *listenAddress
+	Unsafe              bool
+	ClearOnExit         bool
+	WalkerOpts          walkerOpts
+	WalkerRoot          []string
+	WalkerSkip          []string
+	Version             bool
+	Help                bool
+	Threads             int
+	Bench               time.Duration
+	CPUProfile          string
+	MEMProfile          string
+	BlockProfile        string
+	MutexProfile        string
+	TtyDefault          string
+	runtimeTestHook     func(*Terminal)
+	runtimeTestRenderer tui.Renderer
+	runtimeReadHook     func(util.EventType, bool)
+	runtimeReadDoneHook func(util.EventType, bool)
+	runtimePublishHook  func(bool)
 }
 
 func filterNonEmpty(input []string) []string {
@@ -3007,6 +3015,18 @@ func parseOptions(index *int, opts *Options, allArgs []string) error {
 			opts.Grid = n
 		case "--no-grid":
 			opts.Grid = 0
+		case "--grid-span-prefix":
+			prefix, err := nextString("grid span prefix required")
+			if err != nil {
+				return err
+			}
+			if prefix == "" {
+				return errors.New("grid span prefix must not be empty")
+			}
+			if prefix[0] >= '0' && prefix[0] <= '9' {
+				return errors.New("grid span prefix must not begin with an ASCII digit")
+			}
+			opts.GridSpanPrefix = prefix
 		case "--grid-gap":
 			n, err := nextInt("grid gap required")
 			if err != nil {
@@ -3740,6 +3760,9 @@ func (opts *Options) noSeparatorLine() bool {
 // This function can have side-effects and alter some global states.
 // So we run it on fzf.Run and not on ParseOptions.
 func postProcessOptions(opts *Options) error {
+	if opts.GridSpanPrefix != "" && opts.Grid <= 1 {
+		return errors.New("--grid-span-prefix requires --grid with at least 2 columns")
+	}
 	if opts.Ambidouble {
 		uniseg.EastAsianAmbiguousWidth = 2
 	}

@@ -1,11 +1,39 @@
 package fzf
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/junegunn/fzf/src/util"
 )
+
+func TestReaderStopsLiveCommandOnRecordError(t *testing.T) {
+	eb := util.NewEventBox()
+	exec := util.NewExecutor("")
+	var recordErr error
+	reader := NewReader(func(s []byte) bool {
+		if string(s) == "bad" {
+			recordErr = errors.New("invalid record")
+			return false
+		}
+		return true
+	}, eb, exec, false, false)
+	reader.SetErrorCheck(func() error { return recordErr })
+	done := make(chan bool, 1)
+	go func() {
+		done <- reader.readFromCommand(gridSpanHelperCommand("live-invalid"), nil, func() {})
+	}()
+	select {
+	case <-done:
+		if recordErr == nil {
+			t.Fatal("live command stopped without record error")
+		}
+	case <-time.After(3 * time.Second):
+		reader.terminate()
+		t.Fatal("live command did not stop promptly after invalid record")
+	}
+}
 
 func TestReadFromCommand(t *testing.T) {
 	strs := []string{}

@@ -19,6 +19,14 @@ type Item struct {
 	transformed *transformed  // 8
 	origText    *[]byte       // 8
 	colors      *[]ansiOffset // 8
+	span        int           // grid tracks occupied; zero means the default of one
+}
+
+func (item *Item) gridSpan() int {
+	if item.span > 0 {
+		return item.span
+	}
+	return 1
 }
 
 // Index returns ordinal index of the Item

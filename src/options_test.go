@@ -8,6 +8,31 @@ import (
 	"github.com/junegunn/fzf/src/tui"
 )
 
+func TestGridSpanPrefixOptions(t *testing.T) {
+	parse := func(words ...string) (*Options, error) {
+		opts := defaultOptions()
+		index := 0
+		if err := parseOptions(&index, opts, words); err != nil {
+			return nil, err
+		}
+		return opts, postProcessOptions(opts)
+	}
+
+	opts, err := parse("--grid", "6", "--grid-span-prefix", "@@")
+	if err != nil || opts.GridSpanPrefix != "@@" {
+		t.Fatalf("valid span prefix: opts=%#v err=%v", opts, err)
+	}
+	if _, err := parse("--grid-span-prefix", "@@"); err == nil {
+		t.Fatal("span prefix outside grid mode was accepted")
+	}
+	if _, err := parse("--grid", "6", "--grid-span-prefix="); err == nil {
+		t.Fatal("empty span prefix was accepted")
+	}
+	if _, err := parse("--grid", "6", "--grid-span-prefix=1@"); err == nil {
+		t.Fatal("digit-leading span prefix was accepted")
+	}
+}
+
 func TestDelimiterRegex(t *testing.T) {
 	// Valid regex, but a single character -> string
 	delim := delimiterRegexp(".")

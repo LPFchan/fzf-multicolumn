@@ -987,38 +987,42 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 	var renderer tui.Renderer
 	fullscreen := !opts.Height.auto && (opts.Height.size == 0 || opts.Height.percent && opts.Height.size == 100)
 	var err error
-	// Reuse ttyin if available to avoid having multiple file descriptors open
-	// when you run fzf multiple times in your Go program. Closing it is known to
-	// cause problems with 'become' action and invalid terminal state after exit.
-	if ttyin == nil {
-		if ttyin, err = tui.TtyIn(opts.TtyDefault); err != nil {
+	if opts.runtimeTestRenderer != nil {
+		renderer = opts.runtimeTestRenderer
+	} else {
+		// Reuse ttyin if available to avoid having multiple file descriptors open
+		// when you run fzf multiple times in your Go program. Closing it is known to
+		// cause problems with 'become' action and invalid terminal state after exit.
+		if ttyin == nil {
+			if ttyin, err = tui.TtyIn(opts.TtyDefault); err != nil {
+				return nil, err
+			}
+		}
+		if fullscreen {
+			if tui.HasFullscreenRenderer() {
+				renderer = tui.NewFullscreenRenderer(opts.Theme, opts.Black, opts.Mouse, opts.Tabstop)
+			} else {
+				renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit,
+					true, func(h int) int { return h })
+			}
+		} else {
+			maxHeightFunc := func(termHeight int) int {
+				// Minimum height required to render fzf excluding margin and padding
+				effectiveMinHeight := minHeight
+				if previewBox != nil && opts.Preview.aboveOrBelow() {
+					effectiveMinHeight += 1 + borderLines(opts.Preview.Border(opts.Layout))
+				}
+				if opts.noSeparatorLine() {
+					effectiveMinHeight--
+				}
+				effectiveMinHeight += borderLines(opts.BorderShape)
+				return min(termHeight, max(evaluateHeight(opts, termHeight), effectiveMinHeight))
+			}
+			renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit, false, maxHeightFunc)
+		}
+		if err != nil {
 			return nil, err
 		}
-	}
-	if fullscreen {
-		if tui.HasFullscreenRenderer() {
-			renderer = tui.NewFullscreenRenderer(opts.Theme, opts.Black, opts.Mouse, opts.Tabstop)
-		} else {
-			renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit,
-				true, func(h int) int { return h })
-		}
-	} else {
-		maxHeightFunc := func(termHeight int) int {
-			// Minimum height required to render fzf excluding margin and padding
-			effectiveMinHeight := minHeight
-			if previewBox != nil && opts.Preview.aboveOrBelow() {
-				effectiveMinHeight += 1 + borderLines(opts.Preview.Border(opts.Layout))
-			}
-			if opts.noSeparatorLine() {
-				effectiveMinHeight--
-			}
-			effectiveMinHeight += borderLines(opts.BorderShape)
-			return min(termHeight, max(evaluateHeight(opts, termHeight), effectiveMinHeight))
-		}
-		renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit, false, maxHeightFunc)
-	}
-	if err != nil {
-		return nil, err
 	}
 	if opts.Inputless {
 		renderer.HideCursor()
@@ -1202,8 +1206,12 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 	headerInline := inlineListSupported && (opts.HeaderBorderShape == tui.BorderInline || opts.HeaderLinesShape == tui.BorderInline)
 	footerInline := inlineListSupported && opts.FooterBorderShape == tui.BorderInline
 	hasHeader := opts.HeaderBorderShape.Visible() || opts.HeaderLinesShape.Visible()
-	// This should be called before accessing tui.Color*
-	tui.InitTheme(opts.Theme, baseTheme, opts.Bold, opts.Black, opts.InputBorderShape.Visible(), hasHeader, headerInline, footerInline)
+	// This should be called before accessing tui.Color*. Test renderers run
+	// multiple terminal loops in one process and reuse the already initialized
+	// palette to avoid racing global theme state with a prior loop's teardown.
+	if opts.runtimeTestRenderer == nil {
+		tui.InitTheme(opts.Theme, baseTheme, opts.Bold, opts.Black, opts.InputBorderShape.Visible(), hasHeader, headerInline, footerInline)
+	}
 
 	// Gutter character
 	var gutterChar, gutterRawChar string
@@ -1395,6 +1403,20 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 
 func (t *Terminal) deferActivation() bool {
 	return t.initDelay == 0 && (t.hasStartActions || t.hasLoadActions || t.hasResultActions || t.hasFocusActions)
+}
+
+func (t *Terminal) prepareReloadAction(a *action) (*commandSpec, bool) {
+	valid, list := t.buildPlusList(a.a, false)
+	if !valid {
+		// Run commands without item slots, and templates forced by query flags.
+		slot, _, _, forceUpdate := hasPreviewFlags(a.a)
+		valid = !slot || forceUpdate
+	}
+	if !valid {
+		return nil, false
+	}
+	command, tempFiles := t.replacePlaceholder(a.a, false, string(t.input), list)
+	return &commandSpec{command, tempFiles}, a.t == actReloadSync
 }
 
 func (t *Terminal) environ() []string {
@@ -1799,7 +1821,12 @@ func (t *Terminal) avgNumLines() int {
 
 func (t *Terminal) getScrollbar() (int, int) {
 	if t.grid > 1 {
-		return getScrollbar(1, t.gridRows(), t.maxItems(), t.offset/t.grid)
+		layout := t.gridLayout()
+		offsetRow := 0
+		if len(layout.byIndex) > 0 {
+			offsetRow = layout.byIndex[util.Constrain(t.offset, 0, len(layout.byIndex)-1)].row
+		}
+		return getScrollbar(1, len(layout.rows), t.maxItems(), offsetRow)
 	}
 	return getScrollbar(t.avgNumLines(), t.merger.Length(), t.maxItems(), t.offset)
 }
@@ -1919,6 +1946,13 @@ func (t *Terminal) UpdateList(result MatchResult) {
 		}
 	}
 	prevIndex := minItem.Index()
+	prevGridScreenRow := 0
+	if t.grid > 1 && t.merger.Length() > 0 {
+		layout := t.gridLayout()
+		cell := layout.byIndex[util.Constrain(t.cy, 0, len(layout.byIndex)-1)]
+		offsetCell := layout.byIndex[util.Constrain(t.offset, 0, len(layout.byIndex)-1)]
+		prevGridScreenRow = cell.row - offsetCell.row
+	}
 	newRevision := merger.Revision()
 	if t.revision.compatible(newRevision) && t.track != trackDisabled {
 		if t.merger.Length() > 0 {
@@ -2011,6 +2045,10 @@ func (t *Terminal) UpdateList(result MatchResult) {
 			}
 			if match {
 				t.cy = i
+				if t.grid > 1 {
+					layout := t.gridLayout()
+					t.offset = gridOffsetForScreenRow(layout, t.cy, prevGridScreenRow)
+				}
 				if t.track.Current() {
 					t.track.index = idx
 				}
@@ -2027,14 +2065,32 @@ func (t *Terminal) UpdateList(result MatchResult) {
 		i := t.merger.FindIndex(prevIndex)
 		if i >= 0 {
 			t.cy = i
-			t.offset = t.cy - pos
+			if t.grid > 1 {
+				layout := t.gridLayout()
+				t.offset = gridOffsetForScreenRow(layout, t.cy, prevGridScreenRow)
+			} else {
+				t.offset = t.cy - pos
+			}
 		} else if t.track.Current() {
 			t.track = trackDisabled
-			t.cy = pos
-			t.offset = 0
-		} else if t.cy > count {
-			// Try to keep the vertical position when the list shrinks
-			t.cy = count - min(count, t.maxItems()) + pos
+			if t.grid > 1 && count > 0 {
+				layout := t.gridLayout()
+				t.cy = max(0, t.gridNearestSelectable(layout, util.Constrain(prevGridScreenRow, 0, len(layout.rows)-1), 0))
+				t.offset = gridOffsetForScreenRow(layout, t.cy, prevGridScreenRow)
+			} else {
+				t.cy = pos
+				t.offset = 0
+			}
+		} else if t.cy >= count {
+			// Try to keep the logical screen row when the list shrinks.
+			if t.grid > 1 && count > 0 {
+				layout := t.gridLayout()
+				targetRow := max(0, len(layout.rows)-1)
+				t.cy = max(0, t.gridNearestSelectable(layout, targetRow, 0))
+				t.offset = gridOffsetForScreenRow(layout, t.cy, prevGridScreenRow)
+			} else {
+				t.cy = count - min(count, t.maxItems()) + pos
+			}
 		}
 	}
 	// Restore selections by id-nth key after reload completes
@@ -3822,9 +3878,50 @@ func (t *Terminal) printList() {
 	}
 }
 
+type gridPlacement struct {
+	index int
+	row   int
+	col   int
+	span  int
+}
+
+type gridLayout struct {
+	cells     []gridPlacement
+	byIndex   []gridPlacement
+	rowStarts []int
+	rows      [][]gridPlacement
+}
+
+func (t *Terminal) gridLayout() gridLayout {
+	count := t.merger.Length()
+	layout := gridLayout{byIndex: make([]gridPlacement, count)}
+	row, col := 0, 0
+	for index := 0; index < count; index++ {
+		span := min(t.merger.Get(index).item.gridSpan(), t.grid)
+		if col > 0 && col+span > t.grid {
+			row++
+			col = 0
+		}
+		if len(layout.rows) <= row {
+			layout.rows = append(layout.rows, nil)
+			layout.rowStarts = append(layout.rowStarts, index)
+		}
+		cell := gridPlacement{index: index, row: row, col: col, span: span}
+		layout.cells = append(layout.cells, cell)
+		layout.byIndex[index] = cell
+		layout.rows[row] = append(layout.rows[row], cell)
+		col += span
+		if col == t.grid {
+			row++
+			col = 0
+		}
+	}
+	return layout
+}
+
 // Number of rows needed to lay out all matched items in grid mode
 func (t *Terminal) gridRows() int {
-	return (t.merger.Length() + t.grid - 1) / t.grid
+	return len(t.gridLayout().rows)
 }
 
 // Per-cell decoration width (pointer + marker) plus the gap to the next cell
@@ -3864,68 +3961,251 @@ func (t *Terminal) gridBlankAt(index int) bool {
 // spacing) instead of an even 1/N split. When the columns don't fit, the
 // widest column is shrunk first so narrow columns keep their alignment.
 // Measuring is capped; oversized lists fall back to the even split.
-func (t *Terminal) gridColumnWidths(count int) []int {
-	avail := t.window.Width() - t.barCol()
+func (t *Terminal) gridColumnWidths(layout gridLayout) []int {
+	return t.gridColumnWidthsForWidth(layout, max(0, t.window.Width()-t.barCol()))
+}
+
+func (t *Terminal) gridColumnWidthsForWidth(layout gridLayout, avail int) []int {
+	avail = max(0, avail)
 	widths := make([]int, t.grid)
+	floors := make([]int, t.grid)
 	overhead := t.gridCellOverhead()
 	const measureLimit = 4096
-	if count > measureLimit {
-		for col := range widths {
-			widths[col] = avail / t.grid
+	measure := len(layout.cells) <= measureLimit
+	// A nonblank cell needs room for its decorations and at least one text
+	// column. Single-track cells establish an indivisible per-track floor.
+	for _, cell := range layout.cells {
+		if t.gridBlankAt(cell.index) {
+			continue
 		}
-		return widths
-	}
-	for index := 0; index < count; index++ {
-		col := index % t.grid
-		text := gridCellRunes(t.merger.Get(index).item)
-		width := t.displayWidthWithLimit(text, 0, avail) + overhead
-		if width > widths[col] {
-			widths[col] = width
+		if cell.span == 1 {
+			floors[cell.col] = max(floors[cell.col], overhead+1)
 		}
 	}
-	total := 0
-	for _, width := range widths {
-		total += width
+	// Spanning cells establish an aggregate floor across their covered tracks.
+	for _, cell := range layout.cells {
+		if t.gridBlankAt(cell.index) {
+			continue
+		}
+		for sumInts(floors[cell.col:cell.col+cell.span]) < overhead+1 {
+			narrowest := cell.col
+			for col := cell.col + 1; col < cell.col+cell.span; col++ {
+				if floors[col] < floors[narrowest] {
+					narrowest = col
+				}
+			}
+			floors[narrowest]++
+		}
 	}
-	for total > avail {
-		widest := 0
-		for col := 1; col < t.grid; col++ {
-			if widths[col] > widths[widest] {
+	copy(widths, floors)
+	if !measure {
+		// Oversized lists skip text measurement but retain the same feasible
+		// floors and whole-track collapse semantics as measured lists.
+		for sumInts(widths) < avail {
+			widths[sumInts(widths)%t.grid]++
+		}
+	}
+	// Single-track items establish their track's natural width first.
+	if measure {
+		for _, cell := range layout.cells {
+			if cell.span != 1 {
+				continue
+			}
+			text := gridCellRunes(t.merger.Get(cell.index).item)
+			width := t.displayWidthWithLimit(text, 0, avail) + overhead
+			widths[cell.col] = max(widths[cell.col], width)
+		}
+		// Spanning items impose a minimum across all covered tracks, including the
+		// gaps between them. Grow the narrowest covered track until it fits.
+		for _, cell := range layout.cells {
+			if cell.span == 1 {
+				continue
+			}
+			text := gridCellRunes(t.merger.Get(cell.index).item)
+			required := t.displayWidthWithLimit(text, 0, avail) + overhead
+			for sumInts(widths[cell.col:cell.col+cell.span]) < required {
+				narrowest := cell.col
+				for col := cell.col + 1; col < cell.col+cell.span; col++ {
+					if widths[col] < widths[narrowest] {
+						narrowest = col
+					}
+				}
+				widths[narrowest]++
+			}
+		}
+	}
+	for sumInts(widths) > avail {
+		widest := -1
+		for col := 0; col < t.grid; col++ {
+			if widths[col] > floors[col] && (widest < 0 || widths[col] > widths[widest]) {
 				widest = col
 			}
 		}
-		if widths[widest] <= overhead+1 {
+		if widest < 0 {
+			// The terminal is narrower than the feasible floor. Preserve the
+			// leftmost tracks first and collapse only tracks that cannot fit;
+			// never partially render decorations for a surviving track.
+			remaining := avail
+			for col := range widths {
+				if floors[col] <= remaining {
+					widths[col] = floors[col]
+					remaining -= floors[col]
+				} else {
+					widths[col] = 0
+				}
+			}
 			break
 		}
 		widths[widest]--
-		total--
 	}
 	return widths
+}
+
+func sumInts(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func (t *Terminal) gridItemAtRowAnchor(layout gridLayout, row, anchor int) int {
+	if row < 0 || row >= len(layout.rows) {
+		return -1
+	}
+	best, bestDistance := -1, t.grid+1
+	for _, cell := range layout.rows[row] {
+		if t.gridBlankAt(cell.index) {
+			continue
+		}
+		distance := 0
+		if anchor < cell.col {
+			distance = cell.col - anchor
+		} else if anchor >= cell.col+cell.span {
+			distance = anchor - (cell.col + cell.span - 1)
+		}
+		if distance < bestDistance {
+			best, bestDistance = cell.index, distance
+		}
+	}
+	return best
+}
+
+func (t *Terminal) gridNearestSelectable(layout gridLayout, row, anchor int) int {
+	for distance := 0; distance < len(layout.rows); distance++ {
+		candidates := []int{row + distance}
+		if distance > 0 {
+			candidates = append(candidates, row-distance)
+		}
+		for _, candidate := range candidates {
+			if candidate < 0 || candidate >= len(layout.rows) {
+				continue
+			}
+			if item := t.gridItemAtRowAnchor(layout, candidate, anchor); item >= 0 {
+				return item
+			}
+		}
+	}
+	return -1
+}
+
+func (t *Terminal) gridOffsetMove(layout gridLayout, diff int, visibleRows int) bool {
+	if len(layout.rows) == 0 {
+		return false
+	}
+	move := diff
+	if t.layout != layoutDefault {
+		diff *= -1
+	}
+	visibleRows = max(0, visibleRows)
+	current := layout.byIndex[t.cy]
+	offsetRow := layout.byIndex[util.Constrain(t.offset, 0, len(layout.byIndex)-1)].row
+	targetOffsetRow := util.Constrain(offsetRow+diff, 0, max(0, len(layout.rows)-visibleRows))
+	if targetOffsetRow == offsetRow {
+		return t.gridVmove(move, false)
+	}
+	relativeRow := current.row - offsetRow
+	t.offset = layout.rowStarts[targetOffsetRow]
+	if target := t.gridNearestSelectable(layout, util.Constrain(targetOffsetRow+relativeRow, 0, len(layout.rows)-1), current.col); target >= 0 {
+		t.cy = target
+	}
+	t.constrainGrid()
+	return true
+}
+
+func gridOffsetForMiddle(layout gridLayout, itemIndex, visibleRows int) int {
+	if len(layout.rows) == 0 || itemIndex < 0 || itemIndex >= len(layout.byIndex) {
+		return 0
+	}
+	maxOffsetRow := max(0, len(layout.rows)-visibleRows)
+	offsetRow := util.Constrain(layout.byIndex[itemIndex].row-(visibleRows-1)/2, 0, maxOffsetRow)
+	return layout.rowStarts[offsetRow]
+}
+
+func gridOffsetForScreenRow(layout gridLayout, itemIndex, screenRow int) int {
+	if len(layout.rows) == 0 || itemIndex < 0 || itemIndex >= len(layout.byIndex) {
+		return 0
+	}
+	row := util.Constrain(layout.byIndex[itemIndex].row-screenRow, 0, len(layout.rows)-1)
+	return layout.rowStarts[row]
+}
+
+func gridOffsetForBar(layout gridLayout, maxItems, barLength, newBarStart int) int {
+	if len(layout.rowStarts) == 0 {
+		return 0
+	}
+	maxOffsetRow := max(0, len(layout.rows)-maxItems)
+	denominator := maxItems - barLength
+	newOffsetRow := 0
+	if denominator > 0 {
+		newOffsetRow = int(math.Ceil(float64(newBarStart) * float64(maxOffsetRow) / float64(denominator)))
+	}
+	return layout.rowStarts[util.Constrain(newOffsetRow, 0, len(layout.rowStarts)-1)]
+}
+
+func (t *Terminal) gridClickIndexWithLayout(layout gridLayout, widths []int, visibleRow, mx int) int {
+	if visibleRow < 0 || len(layout.rows) == 0 {
+		return -1
+	}
+	offsetRow := layout.byIndex[util.Constrain(t.offset, 0, len(layout.byIndex)-1)].row
+	row := offsetRow + visibleRow
+	if row >= len(layout.rows) {
+		return -1
+	}
+	for _, cell := range layout.rows[row] {
+		left := sumInts(widths[:cell.col])
+		right := left + sumInts(widths[cell.col:cell.col+cell.span])
+		if mx >= left && mx < right {
+			if t.gridBlankAt(cell.index) {
+				return -1
+			}
+			return cell.index
+		}
+	}
+	return -1
 }
 
 // gridClickIndex maps window-local click coordinates to an item index in
 // grid mode, or -1 when the click lands past the last item.
 func (t *Terminal) gridClickIndex(my int, mx int, minY int) int {
-	row := my - minY
-	if row < 0 {
-		return -1
+	layout := t.gridLayout()
+	return t.gridClickIndexWithLayout(layout, t.gridColumnWidths(layout), my-minY, mx)
+}
+
+func (t *Terminal) gridJumpTargets(layout gridLayout, visibleRows int) []int {
+	if len(layout.rows) == 0 {
+		return nil
 	}
-	count := t.merger.Length()
-	widths := t.gridColumnWidths(count)
-	col := t.grid - 1
-	x := 0
-	for c := 0; c < t.grid; c++ {
-		x += widths[c]
-		if mx < x {
-			col = c
-			break
+	offsetRow := layout.byIndex[util.Constrain(t.offset, 0, len(layout.byIndex)-1)].row
+	targets := []int{}
+	for row := offsetRow; row < len(layout.rows) && row < offsetRow+visibleRows; row++ {
+		for _, cell := range layout.rows[row] {
+			if !t.gridBlankAt(cell.index) {
+				targets = append(targets, cell.index)
+			}
 		}
 	}
-	index := t.offset + row*t.grid + col
-	if index >= count || t.gridBlankAt(index) {
-		return -1
-	}
-	return index
+	return targets
 }
 
 // printGridList renders the list window as a row-major grid of t.grid columns.
@@ -3936,36 +4216,56 @@ func (t *Terminal) printGridList() {
 	barLength, barStart := t.getScrollbar()
 	numRows := t.maxItems()
 	startLine := t.promptLines() + t.visibleHeaderLinesInList()
-	count := t.merger.Length()
+	layout := t.gridLayout()
 	barRange := [2]int{startLine + barStart, startLine + barStart + barLength}
-	widths := t.gridColumnWidths(count)
+	widths := t.gridColumnWidths(layout)
 	overhead := t.gridCellOverhead()
-	for row := 0; row < numRows; row++ {
-		line := startLine + row
-		t.move(line, 0, true)
-		t.markOtherLine(line)
-		x := 0
-		for col := 0; col < t.grid; col++ {
-			index := t.offset + row*t.grid + col
-			if index >= count {
+	jumpTargets := t.gridJumpTargets(layout, numRows)
+	jumpLabels := make(map[int]string, min(len(jumpTargets), len(t.jumpLabels)))
+	if t.jumping != jumpDisabled {
+		for idx, itemIndex := range jumpTargets {
+			if idx >= len(t.jumpLabels) {
 				break
 			}
-			if widths[col] > overhead && !t.gridBlankAt(index) {
-				t.move(line, x, false)
-				t.printGridCell(t.merger.Get(index), index, widths[col]-overhead)
+			jumpLabels[itemIndex] = t.jumpLabels[idx : idx+1]
+		}
+	}
+	offsetRow := 0
+	if len(layout.byIndex) > 0 {
+		offsetRow = layout.byIndex[util.Constrain(t.offset, 0, len(layout.byIndex)-1)].row
+	}
+	for visibleRow := 0; visibleRow < numRows; visibleRow++ {
+		line := startLine + visibleRow
+		t.move(line, 0, true)
+		t.markOtherLine(line)
+		row := offsetRow + visibleRow
+		if row < len(layout.rows) {
+			for _, cell := range layout.rows[row] {
+				width := sumInts(widths[cell.col : cell.col+cell.span])
+				if width > overhead && !t.gridBlankAt(cell.index) {
+					t.move(line, sumInts(widths[:cell.col]), false)
+					t.printGridCell(t.merger.Get(cell.index), cell.index, width-overhead, jumpLabels[cell.index])
+				}
 			}
-			x += widths[col]
 		}
 		t.printBar(line, true, barRange)
 	}
 }
 
-func (t *Terminal) printGridCell(result Result, index int, maxTextWidth int) {
+func (t *Terminal) printGridCell(result Result, index int, maxTextWidth int, jumpLabel string) {
 	item := result.item
 	current := index == t.cy
 	_, selected := t.selected[item.Index()]
 
-	if current {
+	if jumpLabel != "" {
+		label := jumpLabel + strings.Repeat(" ", max(0, t.pointerLen-1))
+		if t.pointerLen > 0 {
+			t.window.CPrint(tui.ColPointer, label)
+		} else {
+			maxTextWidth--
+			t.window.CPrint(tui.ColPointer, jumpLabel)
+		}
+	} else if current {
 		if t.pointerLen > 0 {
 			t.window.CPrint(tui.ColCurrentPointer, t.pointer)
 		}
@@ -7503,12 +7803,20 @@ func (t *Terminal) Loop() error {
 				return doAction(&action{t: actToggleUp})
 			case actToggleDown:
 				if t.multi > 0 && t.merger.Length() > 0 && toggle() {
-					t.vmove(-1, true)
+					if t.grid > 1 {
+						t.gridVmove(-1, true)
+					} else {
+						t.vmove(-1, true)
+					}
 					req(reqList)
 				}
 			case actToggleUp:
 				if t.multi > 0 && t.merger.Length() > 0 && toggle() {
-					t.vmove(1, true)
+					if t.grid > 1 {
+						t.gridVmove(1, true)
+					} else {
+						t.vmove(1, true)
+					}
 					req(reqList)
 				}
 			case actDown, actDownMatch, actUp, actUpMatch:
@@ -7533,27 +7841,30 @@ func (t *Terminal) Loop() error {
 				req(reqList)
 			case actGridLeft, actGridRight:
 				if t.grid > 1 && t.merger.Length() > 0 {
+					layout := t.gridLayout()
+					current := layout.byIndex[t.cy]
+					row := layout.rows[current.row]
+					position := 0
+					for idx, cell := range row {
+						if cell.index == t.cy {
+							position = idx
+							break
+						}
+					}
 					diff := 1
 					if a.t == actGridLeft {
 						diff = -1
 					}
-					// Step over placeholder cells; stop if only
-					// placeholders remain in this direction.
-					count := t.merger.Length()
-					dest := t.cy
-					for range count {
-						dest += diff
-						if t.cycle {
-							if dest < 0 {
-								dest = count - 1
-							} else if dest >= count {
-								dest = 0
+					for step := 1; step <= len(row); step++ {
+						dest := position + diff*step
+						if dest < 0 || dest >= len(row) {
+							if !t.cycle {
+								break
 							}
-						} else if dest < 0 || dest >= count {
-							break
+							dest = (dest%len(row) + len(row)) % len(row)
 						}
-						if !t.gridBlankAt(dest) {
-							t.vset(dest)
+						if !t.gridBlankAt(row[dest].index) {
+							t.vset(row[dest].index)
 							req(reqList)
 							break
 						}
@@ -7574,6 +7885,11 @@ func (t *Terminal) Loop() error {
 					break
 				}
 				prevPos := t.cy - t.offset
+				prevGridScreenRow := 0
+				if t.grid > 1 && t.merger.Length() > 0 {
+					layout := t.gridLayout()
+					prevGridScreenRow = layout.byIndex[util.Constrain(t.cy, 0, len(layout.byIndex)-1)].row - layout.byIndex[util.Constrain(t.offset, 0, len(layout.byIndex)-1)].row
+				}
 				prevIndex := t.currentIndex()
 				if newRaw {
 					// Build matchMap if not available
@@ -7618,7 +7934,14 @@ func (t *Terminal) Loop() error {
 				// Try to retain position
 				if prevIndex != minItem.Index() {
 					t.cy = max(0, t.merger.FindIndex(prevIndex))
-					t.offset = t.cy - prevPos
+					if t.grid > 1 && t.merger.Length() > 0 {
+						layout := t.gridLayout()
+						t.offset = gridOffsetForScreenRow(layout, t.cy, prevGridScreenRow)
+					} else if t.grid > 1 {
+						t.cy, t.offset = 0, 0
+					} else {
+						t.offset = t.cy - prevPos
+					}
 				}
 
 				// List needs to be rerendered
@@ -7715,15 +8038,21 @@ func (t *Terminal) Loop() error {
 				// Move at least one line even in a very short window
 				linesToMove = max(1, linesToMove)
 
-				// In grid mode, each line holds t.grid items
-				if t.grid > 1 {
-					linesToMove *= t.grid
-				}
-
-				// Determine the direction of the movement
+				// Determine the direction of the movement.
 				direction := -1
 				if a.t == actPageUp || a.t == actHalfPageUp {
 					direction = 1
+				}
+
+				// Grid pages move by logical placement rows.
+				if t.grid > 1 {
+					for range linesToMove {
+						if !t.gridVmove(direction, false) {
+							break
+						}
+					}
+					req(reqList)
+					break
 				}
 
 				// In non-default layout, items are listed from top to bottom
@@ -7787,25 +8116,34 @@ func (t *Terminal) Loop() error {
 				if a.t == actOffsetDown {
 					diff = -1
 				}
-				if t.layout != layoutDefault {
-					diff *= -1
-				}
-				t.offset += diff
-				before := t.offset
-				t.constrain()
-				if before != t.offset {
-					t.offset = before
+				if t.grid > 1 && t.merger.Length() > 0 {
+					t.gridOffsetMove(t.gridLayout(), diff, t.maxItems())
+				} else {
 					if t.layout != layoutDefault {
 						diff *= -1
 					}
-					t.vmove(diff, false)
+					t.offset += diff
+					before := t.offset
+					t.constrain()
+					if before != t.offset {
+						t.offset = before
+						if t.layout != layoutDefault {
+							diff *= -1
+						}
+						t.vmove(diff, false)
+					}
 				}
 				req(reqList)
 			case actOffsetMiddle:
-				soff := t.scrollOff
-				t.scrollOff = t.window.Height()
-				t.constrain()
-				t.scrollOff = soff
+				if t.grid > 1 && t.merger.Length() > 0 {
+					layout := t.gridLayout()
+					t.offset = gridOffsetForMiddle(layout, t.cy, t.maxItems())
+				} else {
+					soff := t.scrollOff
+					t.scrollOff = t.window.Height()
+					t.constrain()
+					t.scrollOff = soff
+				}
 				req(reqList)
 			case actJump:
 				t.jumping = jumpEnabled
@@ -8252,12 +8590,24 @@ func (t *Terminal) Loop() error {
 					if barLength > 0 {
 						maxItems := t.maxItems()
 						if newBarStart := util.Constrain(my-min-barLength/2, 0, maxItems-barLength); newBarStart != barStart {
-							total := t.merger.Length()
 							prevOffset := t.offset
-							// barStart = (maxItems - barLength) * t.offset / (total - maxItems)
-							perLine := t.avgNumLines()
-							t.offset = int(math.Ceil(float64(newBarStart) * float64(total*perLine-maxItems) / float64(maxItems*perLine-barLength)))
-							t.cy = t.offset + t.cy - prevOffset
+							if t.grid > 1 {
+								layout := t.gridLayout()
+								prevCell := layout.byIndex[util.Constrain(t.cy, 0, len(layout.byIndex)-1)]
+								prevOffsetRow := layout.byIndex[util.Constrain(prevOffset, 0, len(layout.byIndex)-1)].row
+								relativeRow := prevCell.row - prevOffsetRow
+								t.offset = gridOffsetForBar(layout, maxItems, barLength, newBarStart)
+								newOffsetRow := layout.byIndex[t.offset].row
+								if target := t.gridNearestSelectable(layout, util.Constrain(newOffsetRow+relativeRow, 0, len(layout.rows)-1), prevCell.col); target >= 0 {
+									t.cy = target
+								}
+							} else {
+								total := t.merger.Length()
+								// barStart = (maxItems - barLength) * t.offset / (total - maxItems)
+								perLine := t.avgNumLines()
+								t.offset = int(math.Ceil(float64(newBarStart) * float64(total*perLine-maxItems) / float64(maxItems*perLine-barLength)))
+								t.cy = util.Constrain(t.offset+t.cy-prevOffset, 0, t.merger.Length()-1)
+							}
 							req(reqList)
 						}
 					}
@@ -8337,18 +8687,9 @@ func (t *Terminal) Loop() error {
 			case actReload, actReloadSync:
 				t.failed = nil
 
-				valid, list := t.buildPlusList(a.a, false)
-				if !valid {
-					// We run the command even when there's no match
-					// 1. If the template doesn't have any slots
-					// 2. If the template has {q}
-					slot, _, _, forceUpdate := hasPreviewFlags(a.a)
-					valid = !slot || forceUpdate
-				}
-				if valid {
-					command, tempFiles := t.replacePlaceholder(a.a, false, string(t.input), list)
-					newCommand = &commandSpec{command, tempFiles}
-					reloadSync = a.t == actReloadSync
+				if command, sync := t.prepareReloadAction(a); command != nil {
+					newCommand = command
+					reloadSync = sync
 					t.reading = true
 
 					if len(t.idNth) > 0 {
@@ -8551,9 +8892,20 @@ func (t *Terminal) Loop() error {
 		} else {
 			jumpEvent := tui.JumpCancel
 			if event.Type == tui.Rune {
-				if idx := strings.IndexRune(t.jumpLabels, event.Char); idx >= 0 && idx < t.maxItems() && idx < t.merger.Length() {
+				idx := strings.IndexRune(t.jumpLabels, event.Char)
+				target := -1
+				if t.grid > 1 {
+					layout := t.gridLayout()
+					targets := t.gridJumpTargets(layout, t.maxItems())
+					if idx >= 0 && idx < len(targets) {
+						target = targets[idx]
+					}
+				} else if idx >= 0 && idx < t.maxItems() && idx < t.merger.Length() {
+					target = idx + t.offset
+				}
+				if target >= 0 {
 					jumpEvent = tui.Jump
-					t.cy = idx + t.offset
+					t.cy = target
 					if t.jumping == jumpAcceptEnabled {
 						req(reqClose)
 					}
@@ -8736,66 +9088,61 @@ func (t *Terminal) constrainGrid() {
 		t.offset = 0
 		return
 	}
-	totalRows := t.gridRows()
-	curRow := t.cy / t.grid
-	offsetRow := t.offset / t.grid
+	layout := t.gridLayout()
+	curRow := layout.byIndex[t.cy].row
+	offsetIndex := util.Constrain(t.offset, 0, count-1)
+	offsetRow := layout.byIndex[offsetIndex].row
 	minOffsetRow := max(curRow-numRows+1, 0)
-	maxOffsetRow := max(min(totalRows-numRows, curRow), 0)
-	t.offset = util.Constrain(offsetRow, minOffsetRow, maxOffsetRow) * t.grid
+	maxOffsetRow := max(min(len(layout.rows)-numRows, curRow), 0)
+	offsetRow = util.Constrain(offsetRow, minOffsetRow, maxOffsetRow)
+	t.offset = layout.rowStarts[offsetRow]
 }
 
-// Grid-mode counterpart of vmove: moves the cursor by o rows, staying in the
-// same column. With --cycle, moving past the first/last row wraps around
-// within the column. Placeholder cells (see gridBlankAt) are skipped; if
-// only placeholders lie in the movement direction, the cursor stays put.
+// gridVmove moves by logical rows. It prefers an item overlapping the current
+// horizontal anchor, then the nearest item in the target row.
 func (t *Terminal) gridVmove(o int, allowCycle bool) bool {
 	if t.layout != layoutDefault {
 		o *= -1
 	}
-	count := t.merger.Length()
-	if count == 0 {
+	layout := t.gridLayout()
+	if len(layout.rows) == 0 {
 		return false
 	}
-	pos := t.cy
-	for range t.gridRows() {
-		dest, ok := t.gridVstep(pos, o, allowCycle)
-		if !ok {
-			return false
+	current := layout.byIndex[t.cy]
+	targetRow := current.row
+	for attempts := 0; attempts < len(layout.rows); attempts++ {
+		targetRow += o
+		if targetRow < 0 || targetRow >= len(layout.rows) {
+			if !(t.cycle && allowCycle) {
+				return false
+			}
+			if targetRow < 0 {
+				targetRow = len(layout.rows) - 1
+			} else {
+				targetRow = 0
+			}
 		}
-		if !t.gridBlankAt(dest) {
-			return t.vset(dest)
+		best, bestDistance := -1, t.grid+1
+		anchor := current.col
+		for _, cell := range layout.rows[targetRow] {
+			if t.gridBlankAt(cell.index) {
+				continue
+			}
+			distance := 0
+			if anchor < cell.col {
+				distance = cell.col - anchor
+			} else if anchor >= cell.col+cell.span {
+				distance = anchor - (cell.col + cell.span - 1)
+			}
+			if distance < bestDistance {
+				best, bestDistance = cell.index, distance
+			}
 		}
-		pos = dest
+		if best >= 0 {
+			return t.vset(best)
+		}
 	}
 	return false
-}
-
-// gridVstep computes a single o-row move from pos within its column,
-// wrapping when --cycle allows it. Returns false when the move would fall
-// off a non-cycling edge.
-func (t *Terminal) gridVstep(pos int, o int, allowCycle bool) (int, bool) {
-	count := t.merger.Length()
-	dest := pos + o*t.grid
-	if dest < 0 {
-		// Cursor is on the first row
-		if !(t.cycle && allowCycle) {
-			return pos, false
-		}
-		lastRowStart := ((count - 1) / t.grid) * t.grid
-		dest = min(lastRowStart+pos%t.grid, count-1)
-	} else if dest >= count {
-		if pos/t.grid == (count-1)/t.grid {
-			// Already on the last row
-			if !(t.cycle && allowCycle) {
-				return pos, false
-			}
-			dest = pos % t.grid
-		} else {
-			// Clamp to the last item of a partial final row
-			dest = count - 1
-		}
-	}
-	return dest, true
 }
 
 // Returns true if the cursor position is successfully updated

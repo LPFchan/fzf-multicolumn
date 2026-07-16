@@ -30,6 +30,17 @@ type Reader struct {
 	termFunc func()
 	command  *string
 	wait     bool
+	errorFn  func() error
+}
+
+// SetErrorCheck installs a callback checked after every pushed record. A
+// non-nil error aborts the current source immediately, including live streams.
+func (r *Reader) SetErrorCheck(fn func() error) {
+	r.errorFn = fn
+}
+
+func (r *Reader) hasError() bool {
+	return r.errorFn != nil && r.errorFn() != nil
 }
 
 // NewReader returns new Reader object
@@ -45,7 +56,8 @@ func NewReader(pusher func([]byte) bool, eventBox *util.EventBox, executor *util
 		false,
 		func() { os.Stdin.Close() },
 		nil,
-		wait}
+		wait,
+		nil}
 }
 
 func (r *Reader) startEventPoller() {
@@ -116,6 +128,9 @@ func (r *Reader) readChannel(inputChan chan string) bool {
 		}
 		if r.pusher([]byte(item)) {
 			atomic.StoreInt32(&r.event, int32(EvtReadNew))
+		}
+		if r.hasError() {
+			return false
 		}
 	}
 	return true
@@ -211,6 +226,9 @@ func (r *Reader) feed(src io.Reader) {
 				if (err == nil || len(slice) > 0) && r.pusher(slice) {
 					atomic.StoreInt32(&r.event, int32(EvtReadNew))
 				}
+				if r.hasError() {
+					return
+				}
 			} else {
 				// Could not find the delimiter in the buffer
 				//   NOTE: We can further optimize this by keeping track of the cursor
@@ -235,6 +253,9 @@ func (r *Reader) feed(src io.Reader) {
 	}
 	if len(leftover) > 0 && r.pusher(leftover) {
 		atomic.StoreInt32(&r.event, int32(EvtReadNew))
+	}
+	if r.hasError() {
+		return
 	}
 }
 
@@ -367,6 +388,9 @@ func (r *Reader) readFiles(roots []string, opts walkerOpts, ignores []string) bo
 			if ((opts.file && !isDir) || (opts.dir && isDir)) && r.pusher(stringBytes(path)) {
 				atomic.StoreInt32(&r.event, int32(EvtReadNew))
 			}
+			if r.hasError() {
+				return context.Canceled
+			}
 		}
 		r.mutex.Lock()
 		defer r.mutex.Unlock()
@@ -409,5 +433,8 @@ func (r *Reader) readFromCommand(command string, environ []string, signalReady f
 	r.mutex.Unlock()
 
 	r.feed(execOut)
+	if r.hasError() {
+		r.terminate()
+	}
 	return exec.Wait() == nil
 }
