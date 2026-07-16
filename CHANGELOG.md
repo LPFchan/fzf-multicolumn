@@ -1,8 +1,8 @@
 CHANGELOG
 =========
 
-Unreleased (fzf-multicolumn)
-----------------------------
+0.74.0-multicolumn.3
+----------------------
 - Added opt-in `--grid-span-prefix=PREFIX` records for per-item grid track spans.
   Span metadata is stripped at ingestion from matching, display, placeholders,
   field transforms, filtering, reloads, and selected output.
