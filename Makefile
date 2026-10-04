@@ -87,7 +87,7 @@ endif
 
 all: target/$(BINARY)
 
-test: $(SOURCES) test/grid_span_integration.sh
+test: $(SOURCES) test/grid_span_integration.sh test/install_multicolumn_integration.sh
 	SHELL=/bin/sh GOOS= $(GO) test -v -tags "$(TAGS)" \
 				github.com/junegunn/fzf/src \
 				github.com/junegunn/fzf/src/algo \
@@ -96,7 +96,8 @@ test: $(SOURCES) test/grid_span_integration.sh
 	tmpdir=$$(mktemp -d 2>/dev/null || mktemp -d -t fzf-grid-span); \
 	trap 'rm -rf "$$tmpdir"' EXIT HUP INT TERM; \
 	$(GO) build -o "$$tmpdir/fzf-grid-span-test" .; \
-	test/grid_span_integration.sh "$$tmpdir/fzf-grid-span-test"
+	test/grid_span_integration.sh "$$tmpdir/fzf-grid-span-test" && \
+	test/install_multicolumn_integration.sh "$$tmpdir/fzf-grid-span-test"
 
 itest:
 	ruby test/runner.rb
