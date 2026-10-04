@@ -164,6 +164,8 @@ download() {
 
   if [ -f fzf-multicolumn ]; then
     mv fzf-multicolumn fzf
+  elif [ -f fzf-multicolumn.exe ]; then
+    mv fzf-multicolumn.exe fzf
   fi
   if [ ! -f fzf ]; then
     binary_error="Failed to download ${1}"
@@ -180,8 +182,20 @@ binary_error=""
 case "$archi" in
   Darwin\ arm64*) download fzf-multicolumn-$version-darwin_arm64.tgz ;;
   Darwin\ x86_64*) download fzf-multicolumn-$version-darwin_amd64.tgz ;;
+  Linux\ armv5*) download fzf-multicolumn-$version-linux_armv5.tgz ;;
+  Linux\ armv6*) download fzf-multicolumn-$version-linux_armv6.tgz ;;
+  Linux\ armv7*) download fzf-multicolumn-$version-linux_armv7.tgz ;;
+  Linux\ armv8*) download fzf-multicolumn-$version-linux_arm64.tgz ;;
+  Linux\ aarch64\ Android) download fzf-multicolumn-$version-android_arm64.tgz ;;
   Linux\ aarch64*) download fzf-multicolumn-$version-linux_arm64.tgz ;;
+  Linux\ loongarch64*) download fzf-multicolumn-$version-linux_loong64.tgz ;;
+  Linux\ riscv64*) download fzf-multicolumn-$version-linux_riscv64.tgz ;;
+  Linux\ ppc64le*) download fzf-multicolumn-$version-linux_ppc64le.tgz ;;
+  Linux\ s390x*) download fzf-multicolumn-$version-linux_s390x.tgz ;;
   Linux\ x86_64*) download fzf-multicolumn-$version-linux_amd64.tgz ;;
+  FreeBSD\ *64*) download fzf-multicolumn-$version-freebsd_amd64.tgz ;;
+  OpenBSD\ *64*) download fzf-multicolumn-$version-openbsd_amd64.tgz ;;
+  CYGWIN*\ *64* | MINGW*\ *64* | MSYS*\ *64* | Windows*\ *64*) download fzf-multicolumn-$version-windows_amd64.zip ;;
   *)
     if [ -x "$fzf_base/bin/fzf" ] && check_binary; then
       binary_error=""

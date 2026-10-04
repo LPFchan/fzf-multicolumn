@@ -110,8 +110,9 @@ The binary is a drop-in superset of the fzf release it's based on, but it's buil
 
 The checkout installers preserve an existing grid-capable `bin/fzf` binary.
 The Bash installer downloads this fork’s macOS/Linux release assets when needed
-and builds this checkout on other platforms. The PowerShell installer builds
-this checkout with Go; it requires Go on Windows.
+and tries fork assets for the other supported architectures. The PowerShell
+installer tries a Windows fork ZIP. Both build this checkout with Go when a
+matching release asset is unavailable.
 
 ## Tracking upstream
 
