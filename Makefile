@@ -23,7 +23,7 @@ endif
 ifeq ($(VERSION),)
 $(error Not on git repository; cannot determine $$FZF_VERSION)
 endif
-VERSION_TRIM   := $(shell echo $(VERSION) | sed "s/^v//; s/-.*//")
+VERSION_TRIM   := $(shell echo $(VERSION) | sed "s/^v//")
 VERSION_REGEX  := $(subst .,\.,$(VERSION_TRIM))
 
 ifdef FZF_REVISION
