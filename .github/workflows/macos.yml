@@ -32,6 +32,15 @@ jobs:
     - name: Install packages
       run: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install fish zsh tmux shfmt
 
+    - name: Install Nushell
+      run: |
+        arch="$(uname -m)"
+        if [ "$arch" = arm64 ]; then arch=aarch64; fi
+        archive="nu-0.114.1-${arch}-apple-darwin"
+        curl -fsSL "https://github.com/nushell/nushell/releases/download/0.114.1/${archive}.tar.gz" -o "$RUNNER_TEMP/nu.tar.gz"
+        tar -xzf "$RUNNER_TEMP/nu.tar.gz" -C "$RUNNER_TEMP"
+        sudo install "$RUNNER_TEMP/${archive}/nu" /usr/local/bin/nu
+
     - name: Install Ruby gems
       run: bundle install
 
