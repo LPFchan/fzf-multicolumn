@@ -23,7 +23,7 @@ endif
 ifeq ($(VERSION),)
 $(error Not on git repository; cannot determine $$FZF_VERSION)
 endif
-VERSION_TRIM   := $(shell echo $(VERSION) | sed "s/^v//; s/-.*//")
+VERSION_TRIM   := $(shell echo $(VERSION) | sed "s/^v//")
 VERSION_REGEX  := $(subst .,\.,$(VERSION_TRIM))
 
 ifdef FZF_REVISION
@@ -87,7 +87,7 @@ endif
 
 all: target/$(BINARY)
 
-test: $(SOURCES) test/grid_span_integration.sh
+test: $(SOURCES) test/grid_span_integration.sh test/install_multicolumn_integration.sh
 	SHELL=/bin/sh GOOS= $(GO) test -v -tags "$(TAGS)" \
 				github.com/junegunn/fzf/src \
 				github.com/junegunn/fzf/src/algo \
@@ -96,10 +96,21 @@ test: $(SOURCES) test/grid_span_integration.sh
 	tmpdir=$$(mktemp -d 2>/dev/null || mktemp -d -t fzf-grid-span); \
 	trap 'rm -rf "$$tmpdir"' EXIT HUP INT TERM; \
 	$(GO) build -o "$$tmpdir/fzf-grid-span-test" .; \
-	test/grid_span_integration.sh "$$tmpdir/fzf-grid-span-test"
+	test/grid_span_integration.sh "$$tmpdir/fzf-grid-span-test" && \
+	test/install_multicolumn_integration.sh "$$tmpdir/fzf-grid-span-test"
 
 itest:
 	ruby test/runner.rb
+
+# Actively fuzz the matcher fast paths against the general algorithm.
+# Go fuzzes one target at a time, so iterate. Override duration with
+# FUZZTIME (e.g. make fuzz FUZZTIME=5m).
+FUZZTIME ?= 30s
+fuzz:
+	@for t in FuzzFuzzyMatchV2Single FuzzFuzzyMatchV2Two FuzzRunePrefilter; do \
+		echo "== $$t =="; \
+		$(GO) test -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME) ./src/algo || exit 1; \
+	done
 
 bench:
 	cd src && SHELL=/bin/sh GOOS= $(GO) test -v -tags "$(TAGS)" -run=Bench -bench=. -benchmem

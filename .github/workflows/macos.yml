@@ -3,9 +3,9 @@ name: Test fzf on macOS
 
 on:
   push:
-    branches: [ master, devel ]
+    branches: [ master, devel, multicolumn ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, multicolumn ]
   workflow_dispatch:
 
 permissions:
@@ -20,26 +20,42 @@ jobs:
         fetch-depth: 0
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7
       with:
         go-version: "1.23"
 
     - name: Setup Ruby
-      uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1
+      uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
       with:
-        ruby-version: 3.0.0
+        ruby-version: 3.4.6
 
     - name: Install packages
-      run: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install fish zsh tmux shfmt
+      run: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install bash fish zsh tmux shfmt
+
+    - name: Install Nushell
+      run: |
+        arch="$(uname -m)"
+        if [ "$arch" = arm64 ]; then arch=aarch64; fi
+        archive="nu-0.114.1-${arch}-apple-darwin"
+        curl -fsSL "https://github.com/nushell/nushell/releases/download/0.114.1/${archive}.tar.gz" -o "$RUNNER_TEMP/nu.tar.gz"
+        tar -xzf "$RUNNER_TEMP/nu.tar.gz" -C "$RUNNER_TEMP"
+        sudo install "$RUNNER_TEMP/${archive}/nu" /usr/local/bin/nu
 
     - name: Install Ruby gems
-      run: gem install --no-document minitest:5.14.2 rubocop:1.0.0 rubocop-minitest:0.10.1 rubocop-performance:1.8.1
+      run: bundle install
 
     - name: Rubocop
-      run: rubocop --require rubocop-minitest --require rubocop-performance
+      run: make lint
 
     - name: Unit test
       run: make test
 
     - name: Integration test
-      run: make install && ./install --all && LC_ALL=C tmux new-session -d && ruby test/test_go.rb --verbose
+      run: |
+        export PATH="$(brew --prefix bash)/bin:$PATH"
+        export SHELL="$(command -v bash)"
+        bash --version
+        make install
+        ./install --all
+        LC_ALL=C tmux new-session -d
+        ruby test/runner.rb --verbose

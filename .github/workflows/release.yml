@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to validate (e.g. 0.73.0).'
+        description: 'Fork version to validate (e.g. 0.74.0-multicolumn.3).'
         type: string
         required: true
 
@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
 
@@ -42,12 +42,7 @@ jobs:
         run: |
           set -e
           V='${{ steps.ver.outputs.version }}'
-          R=$(echo "$V" | sed 's/\./\\./g')
-          grep -q "^${R}$" CHANGELOG.md
-          grep -qF "\"fzf ${V}\"" man/man1/fzf.1
-          grep -qF "\"fzf ${V}\"" man/man1/fzf-tmux.1
-          grep -qF "${V}" install
-          grep -qF "${V}" install.ps1
+          make prerelease VERSION="$V"
 
       - name: Extract release notes
         run: |

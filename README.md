@@ -95,7 +95,7 @@ curl -fsSLO https://github.com/LPFchan/fzf-multicolumn/releases/download/v0.74.0
 tar -xzf fzf-multicolumn-*.tgz && install fzf-multicolumn ~/.local/bin/
 ```
 
-Or build from source (Go 1.20+):
+Or build from source (Go 1.23+):
 
 ```sh
 git clone https://github.com/LPFchan/fzf-multicolumn.git
@@ -107,6 +107,12 @@ install fzf-multicolumn ~/.local/bin/   # or /opt/homebrew/bin on macOS
 > **macOS note:** when reinstalling over an existing copy, `rm` the old binary before `cp`-ing the new one. Overwriting a signed binary in place invalidates the kernel's per-vnode code-signature cache and the next launch gets SIGKILLed with no error message.
 
 The binary is a drop-in superset of the fzf release it's based on, but it's built and versioned independently — it does not replace your packaged `fzf`, and the shell integration scripts still belong to upstream.
+
+The checkout installers preserve an existing grid-capable `bin/fzf` binary.
+The Bash installer downloads this fork’s macOS/Linux release assets when needed
+and tries fork assets for the other supported architectures. The PowerShell
+installer tries a Windows fork ZIP. Both build this checkout with Go when a
+matching release asset is unavailable.
 
 ## Tracking upstream
 
