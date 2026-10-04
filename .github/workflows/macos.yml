@@ -30,7 +30,7 @@ jobs:
         ruby-version: 3.4.6
 
     - name: Install packages
-      run: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install fish zsh tmux shfmt
+      run: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install bash fish zsh tmux shfmt
 
     - name: Install Nushell
       run: |
@@ -51,4 +51,11 @@ jobs:
       run: make test
 
     - name: Integration test
-      run: make install && ./install --all && LC_ALL=C tmux new-session -d && ruby test/runner.rb --verbose
+      run: |
+        export PATH="$(brew --prefix bash)/bin:$PATH"
+        export SHELL="$(command -v bash)"
+        bash --version
+        make install
+        ./install --all
+        LC_ALL=C tmux new-session -d
+        ruby test/runner.rb --verbose
