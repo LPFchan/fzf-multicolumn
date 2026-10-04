@@ -254,10 +254,18 @@ func TestGetCharEventKey(t *testing.T) {
 
 	}
 	r := NewFullscreenRenderer(&ColorTheme{}, false, false, 8)
-	r.Init()
+	previousScreen, previousResize := _screen, _initialResize
+	_screen = tcell.NewSimulationScreen("UTF-8")
+	_initialResize = true
+	t.Cleanup(func() {
+		r.Close()
+		_screen, _initialResize = previousScreen, previousResize
+	})
+	if err := r.Init(); err != nil {
+		t.Fatal(err)
+	}
 
 	// run and evaluate the tests
-	initialResizeAsInvalid := true
 	for _, test := range tests {
 		// generate key event
 		giveEvent := tcell.NewEventKey(test.giveKey.Type, test.giveKey.Char, test.giveKey.Mods)
@@ -266,16 +274,6 @@ func TestGetCharEventKey(t *testing.T) {
 
 		// process the event in fzf and evaluate the test
 		gotEvent := r.GetChar(true)
-		// skip Resize events, those are sometimes put in the buffer outside of this test
-		if initialResizeAsInvalid && gotEvent.Type == Invalid {
-			t.Logf("Resize as Invalid swallowed")
-			initialResizeAsInvalid = false
-			gotEvent = r.GetChar(true)
-		}
-		if gotEvent.Type == Resize {
-			t.Logf("Resize swallowed")
-			gotEvent = r.GetChar(true)
-		}
 		t.Logf("wantEvent = %T{Type: %v, Char: %q (%[3]v)}\n", test.wantKey, test.wantKey.Type, test.wantKey.Char)
 		t.Logf("gotEvent = %T{Type: %v, Char: %q (%[3]v)}\n", gotEvent, gotEvent.Type, gotEvent.Char)
 
@@ -283,7 +281,6 @@ func TestGetCharEventKey(t *testing.T) {
 		assert(t, "r.GetChar(true).Char", gotEvent.Char, test.wantKey.Char)
 	}
 
-	r.Close()
 }
 
 /*
