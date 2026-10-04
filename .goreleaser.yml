@@ -1,6 +1,6 @@
 ---
 version: 2
-project_name: fzf
+project_name: fzf-multicolumn
 
 before:
   hooks:
@@ -8,6 +8,7 @@ before:
 
 builds:
   - id: fzf
+    binary: fzf-multicolumn
     goos:
       - darwin
       - linux
@@ -88,7 +89,7 @@ archives:
     ids:
       - fzf
     formats:
-      - tar.gz
+      - tgz
     format_overrides:
       - goos: windows
         formats:
@@ -97,12 +98,12 @@ archives:
       - non-existent*
 
 nfpms:
-  - package_name: fzf
+  - package_name: fzf-multicolumn
     file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
-    vendor: junegunn
-    homepage: https://github.com/junegunn/fzf
-    maintainer: Junegunn Choi <junegunn.c@gmail.com>
-    description: Command-line fuzzy finder
+    vendor: LPFchan
+    homepage: https://github.com/LPFchan/fzf-multicolumn
+    maintainer: yeowool <me@lost.plus>
+    description: Command-line fuzzy finder with multicolumn grid layout
     license: MIT
     section: utils
     formats:
@@ -111,14 +112,17 @@ nfpms:
       - fzf
     contents:
       - src: man/man1/fzf.1
-        dst: /usr/share/man/man1/fzf.1
+        dst: /usr/share/man/man1/fzf-multicolumn.1
       - src: LICENSE
-        dst: /usr/share/doc/fzf/copyright
+        dst: /usr/share/doc/fzf-multicolumn/copyright
+
+checksum:
+  name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
 
 release:
   github:
-    owner: junegunn
-    name: fzf
+    owner: LPFchan
+    name: fzf-multicolumn
   prerelease: auto
   name_template: '{{ .Version }}'
 
